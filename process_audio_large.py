@@ -69,7 +69,7 @@ class HighPrecisionAudioProcessor:
             # 2. 加载对齐模型（提高时间戳精度）
             logger.info("加载强制对齐模型...")
             self.align_model, self.metadata = whisperx.load_align_model(
-                language_code="en",  # 假设是英语，根据需要调整
+                language_code="nl",  # 荷兰语
                 device=self.device
             )
             logger.info("✅ 对齐模型加载完成")
@@ -233,7 +233,7 @@ class HighPrecisionAudioProcessor:
                 'text': text,
                 'confidence': round(confidence, 4),
                 'word_count': word_count,
-                'language': 'en',  # 或根据检测结果
+                'language': 'nl',  # 荷兰语
                 'model_used': 'large-v3',
                 'device_used': self.device,
                 'has_ai_speaker_detection': speaker_success
