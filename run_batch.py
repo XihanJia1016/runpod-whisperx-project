@@ -13,30 +13,31 @@ def main():
     print("🚀 RunPod WhisperX Large-v3 批量处理开始")
     print("="*60)
     
-    # 音频文件配置 - 自动检测35.x.mp3格式文件
+    # 音频文件配置 - 自动检测所有音频文件
     input_dir = Path("/workspace/input")
-    audio_files = list(input_dir.glob("35.*.mp3"))
+    # 支持常见音频格式
+    audio_extensions = ["*.mp3", "*.wav", "*.m4a", "*.flac", "*.ogg"]
+    audio_files = []
+    for ext in audio_extensions:
+        audio_files.extend(input_dir.glob(ext))
     
     if not audio_files:
-        print("❌ 未找到35.*.mp3格式的文件")
-        print("💡 请确保音频文件命名为: 35.1.mp3, 35.2.mp3, 35.3.mp3")
+        print("❌ 未找到音频文件")
+        print("💡 支持的格式: .mp3, .wav, .m4a, .flac, .ogg")
+        print(f"💡 请将音频文件放在: {input_dir}")
         sys.exit(1)
     
     # 解析文件配置
     audio_configs = []
-    for file_path in sorted(audio_files):
+    for i, file_path in enumerate(sorted(audio_files), 1):
         filename = file_path.name
-        # 从35.X.mp3提取conversation ID
-        try:
-            conversation_id = int(filename.split('.')[1])
-            audio_configs.append({
-                "file": filename,
-                "path": file_path,
-                "dyad": 35,
-                "conversation": conversation_id
-            })
-        except (IndexError, ValueError):
-            print(f"⚠️ 跳过文件: {filename} (格式不正确)")
+        # 使用文件序号作为conversation ID
+        audio_configs.append({
+            "file": filename,
+            "path": file_path,
+            "dyad": 35,  # 保持原有的dyad编号
+            "conversation": i  # 使用序号作为conversation ID
+        })
     
     if not audio_configs:
         print("❌ 没有有效的音频文件")
