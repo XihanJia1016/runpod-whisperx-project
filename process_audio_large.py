@@ -24,15 +24,41 @@ torch.backends.cudnn.allow_tf32 = False
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+def fix_cudnn_issue():
+    """修复cuDNN库问题"""
+    logger.info("🔧 尝试修复cuDNN库问题...")
+    
+    try:
+        # 尝试安装缺失的cuDNN库
+        logger.info("🔧 安装cuDNN库...")
+        subprocess.run(['apt', 'update'], check=True, capture_output=True)
+        subprocess.run(['apt', 'install', '-y', 'libcudnn8', 'libcudnn8-dev'], check=True, capture_output=True)
+        logger.info("✅ cuDNN库安装完成")
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        logger.warning(f"⚠️ 无法通过apt安装cuDNN: {e}")
+        
+        # 尝试使用conda安装
+        try:
+            logger.info("🔧 尝试通过conda安装cudnn...")
+            subprocess.run(['conda', 'install', '-c', 'conda-forge', 'cudnn', '-y'], check=True, capture_output=True)
+            logger.info("✅ cuDNN通过conda安装完成")
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            logger.warning(f"⚠️ conda安装也失败: {e}")
+
 def setup_cuda_environment():
     """设置CUDA环境变量修复cuDNN问题"""
+    # 先尝试修复cuDNN
+    fix_cudnn_issue()
+    
     cuda_paths = [
         "/usr/local/cuda/lib64",
         "/usr/local/cuda-11.8/lib64", 
         "/usr/local/cuda-11.7/lib64",
         "/usr/local/cuda-11.6/lib64",
         "/usr/lib/x86_64-linux-gnu",
-        "/opt/conda/lib"
+        "/opt/conda/lib",
+        "/opt/conda/pkgs/cudnn*/lib",
+        "/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib"
     ]
     
     # 检查PyTorch信息
@@ -55,11 +81,19 @@ def setup_cuda_environment():
             os.environ['LD_LIBRARY_PATH'] = ':'.join(new_paths) + ':' + current_path
         else:
             os.environ['LD_LIBRARY_PATH'] = ':'.join(new_paths)
-        logger.info(f"🔧 已设置LD_LIBRARY_PATH: {os.environ['LD_LIBRARY_PATH']}")
+        logger.info(f"🔧 已设置LD_LIBRARY_PATH")
     
     # 设置额外的环境变量来稳定cuDNN
     os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
     os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
+    
+    # 强制重新加载动态库
+    try:
+        import ctypes
+        ctypes.CDLL("libcudnn.so.8", mode=ctypes.RTLD_GLOBAL)
+        logger.info("✅ 成功加载libcudnn.so.8")
+    except Exception as e:
+        logger.warning(f"⚠️ 无法加载libcudnn.so.8: {e}")
     
 def ensure_ffmpeg():
     """确保ffmpeg已安装"""
@@ -103,6 +137,7 @@ class HighPrecisionAudioProcessor:
             'word_timestamps': True,
             'vad_filter': True,
             'temperature': 0.0,  # 确定性输出
+            'enable_speaker_diarization': True,  # 启用说话人识别
         }
         
         logger.info(f"初始化高精度处理器: 设备={self.device}")
