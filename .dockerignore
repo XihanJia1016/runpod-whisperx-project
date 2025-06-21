@@ -1,0 +1,11 @@
+.git
+.gitignore
+README.md
+*.pyc
+__pycache__
+.pytest_cache
+.coverage
+.DS_Store
+audio/
+output/
+*.tar.gz
