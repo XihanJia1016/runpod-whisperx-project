@@ -12,6 +12,7 @@ import time
 import logging
 from pathlib import Path
 import numpy as np
+from pyannote.audio import Pipeline
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -71,10 +72,12 @@ class HighPrecisionAudioProcessor:
             
             # 3. 加载说话人识别模型
             logger.info("加载说话人识别模型...")
-            self.diarize_model = whisperx.DiarizationPipeline(
-                use_auth_token=None,  # 如需要可添加HF token
-                device=self.device
+            self.diarize_model = Pipeline.from_pretrained(
+                "pyannote/speaker-diarization-3.1", 
+                use_auth_token=None
             )
+            if self.device == "cuda":
+                self.diarize_model.to(torch.device("cuda"))
             logger.info("✅ 说话人识别模型加载完成")
             
             return True
@@ -134,7 +137,7 @@ class HighPrecisionAudioProcessor:
             if self.diarize_model:
                 logger.info("开始说话人识别...")
                 try:
-                    diarize_segments = self.diarize_model(audio)
+                    diarize_segments = self.diarize_model({"waveform": torch.from_numpy(audio).unsqueeze(0), "sample_rate": 16000})
                     result = whisperx.assign_word_speakers(diarize_segments, result)
                     speaker_success = True
                     logger.info("✅ 说话人识别完成")
