@@ -110,10 +110,7 @@ class HighPrecisionAudioProcessor:
             logger.info("开始高精度转录...")
             result = self.model.transcribe(
                 audio,
-                batch_size=self.config['batch_size'],
-                temperature=self.config['temperature'],
-                word_timestamps=self.config['word_timestamps'],
-                vad_filter=self.config['vad_filter']
+                batch_size=self.config['batch_size']
             )
             
             segments = result.get("segments", [])
