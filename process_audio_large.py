@@ -76,9 +76,15 @@ class HighPrecisionAudioProcessor:
             
             # 3. 加载说话人识别模型
             logger.info("加载说话人识别模型...")
+            # 获取HuggingFace token (需要设置环境变量 HF_TOKEN)
+            hf_token = os.getenv('HF_TOKEN')
+            if not hf_token:
+                logger.warning("⚠️ 未设置HF_TOKEN环境变量，说话人识别可能失败")
+                logger.info("💡 请运行: export HF_TOKEN='your_token_here'")
+            
             self.diarize_model = Pipeline.from_pretrained(
                 "pyannote/speaker-diarization-3.1", 
-                use_auth_token=None
+                use_auth_token=hf_token
             )
             if self.device == "cuda":
                 self.diarize_model.to(torch.device("cuda"))
