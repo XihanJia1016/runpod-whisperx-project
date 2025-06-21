@@ -31,12 +31,37 @@ def main():
     audio_configs = []
     for i, file_path in enumerate(sorted(audio_files), 1):
         filename = file_path.name
-        # 使用文件序号作为conversation ID
+        
+        # 从文件名提取dyad和conversation信息
+        # 支持格式: 19.4.mp3 -> dyad=19, conversation=4
+        # 支持格式: 33.4.mp3 -> dyad=33, conversation=4  
+        # 支持格式: 35.3.mp3 -> dyad=35, conversation=3
+        try:
+            # 移除文件扩展名
+            name_without_ext = filename.rsplit('.', 1)[0]
+            # 按点分割
+            parts = name_without_ext.split('.')
+            
+            if len(parts) >= 2:
+                dyad_id = int(parts[0])
+                conversation_id = int(parts[1])
+            else:
+                # 如果无法解析，使用文件序号
+                dyad_id = 35  # 默认dyad
+                conversation_id = i
+                print(f"⚠️ 无法从文件名 {filename} 解析dyad.conversation，使用默认值: dyad={dyad_id}, conversation={conversation_id}")
+                
+        except (ValueError, IndexError):
+            # 解析失败，使用默认值
+            dyad_id = 35
+            conversation_id = i
+            print(f"⚠️ 文件名 {filename} 格式不标准，使用默认值: dyad={dyad_id}, conversation={conversation_id}")
+        
         audio_configs.append({
             "file": filename,
             "path": file_path,
-            "dyad": 35,  # 保持原有的dyad编号
-            "conversation": i  # 使用序号作为conversation ID
+            "dyad": dyad_id,
+            "conversation": conversation_id
         })
     
     if not audio_configs:
@@ -108,17 +133,26 @@ def main():
             # 重新排序segment_id（全局连续）
             df_combined['segment_id'] = range(1, len(df_combined) + 1)
             
+            # 根据实际dyad生成文件名
+            dyad_ids = df_combined['dyad'].unique()
+            if len(dyad_ids) == 1:
+                # 单个dyad
+                dyad_name = f"dyad_{dyad_ids[0]}"
+            else:
+                # 多个dyad
+                dyad_name = f"dyads_{'_'.join(map(str, sorted(dyad_ids)))}"
+            
             # 保存合并的CSV
-            combined_file = "/workspace/output/dyad_35_combined_transcription.csv"
+            combined_file = f"/workspace/output/{dyad_name}_combined_transcription.csv"
             df_combined.to_csv(combined_file, index=False, encoding='utf-8')
             
             print(f"✅ 合并文件已保存: {combined_file}")
             print(f"📈 总片段数: {len(df_combined)}")
             
             # 保存分组统计
-            stats_file = "/workspace/output/dyad_35_summary_stats.txt"
+            stats_file = f"/workspace/output/{dyad_name}_summary_stats.txt"
             with open(stats_file, 'w', encoding='utf-8') as f:
-                f.write(f"Dyad 35 转录统计汇总\n")
+                f.write(f"{dyad_name.replace('_', ' ').title()} 转录统计汇总\n")
                 f.write(f"{'='*50}\n\n")
                 
                 # 按conversation分组统计
