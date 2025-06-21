@@ -46,6 +46,12 @@ ENV HF_HOME=/workspace/cache
 ENV CUDA_VISIBLE_DEVICES=0
 ENV PYTHONPATH=/workspace
 
+# 修复cuDNN库路径问题
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib:$LD_LIBRARY_PATH
+
+# 禁用TF32以避免精度问题
+ENV TORCH_ALLOW_TF32_CUBLAS_OVERRIDE=0
+
 # 设置权限
 RUN chmod +x *.py
 

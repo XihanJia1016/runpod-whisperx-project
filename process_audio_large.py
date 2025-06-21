@@ -14,6 +14,10 @@ from pathlib import Path
 import numpy as np
 from pyannote.audio import Pipeline
 
+# 禁用TF32以避免精度和兼容性问题
+torch.backends.cuda.matmul.allow_tf32 = False
+torch.backends.cudnn.allow_tf32 = False
+
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
