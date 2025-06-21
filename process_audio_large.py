@@ -293,6 +293,10 @@ class HighPrecisionAudioProcessor:
         """格式化转录结果"""
         processed = []
         
+        # 调试：记录第一个segment的结构
+        if segments and len(segments) > 0:
+            logger.info(f"🔍 第一个segment包含的字段: {list(segments[0].keys())}")
+        
         for i, seg in enumerate(segments):
             # 处理说话人信息
             if speaker_success and "speaker" in seg:
@@ -320,7 +324,25 @@ class HighPrecisionAudioProcessor:
             
             # 获取文本和置信度
             text = seg.get('text', '').strip()
-            confidence = seg.get('confidence', 0.0)
+            
+            # 计算置信度（从多个可能的源）
+            confidence = 0.0
+            if 'confidence' in seg:
+                confidence = seg['confidence']
+            elif 'avg_logprob' in seg:
+                # 将logprob转换为置信度近似值
+                confidence = min(1.0, max(0.0, (seg['avg_logprob'] + 1.0)))
+            elif 'words' in seg and seg['words']:
+                # 从词级置信度计算平均值
+                word_confidences = [w.get('probability', 0.0) for w in seg['words'] if 'probability' in w]
+                if word_confidences:
+                    confidence = sum(word_confidences) / len(word_confidences)
+                else:
+                    # 如果没有任何置信度信息，根据无停顿时间估算
+                    confidence = 0.85 if seg.get('no_speech_prob', 1.0) < 0.5 else 0.3
+            else:
+                # 默认合理置信度（而非0）
+                confidence = 0.8
             
             # 统计词级信息
             words = seg.get('words', [])
