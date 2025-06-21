@@ -134,10 +134,24 @@ class HighPrecisionAudioProcessor:
                 logger.info("✅ 强制对齐完成")
             
             # 4. 说话人识别
+            speaker_success = False
             if self.diarize_model:
                 logger.info("开始说话人识别...")
                 try:
-                    diarize_segments = self.diarize_model({"waveform": torch.from_numpy(audio).unsqueeze(0), "sample_rate": 16000})
+                    # 使用正确的API调用方式
+                    import torchaudio
+                    waveform, sample_rate = torchaudio.load(audio_path)
+                    diarization = self.diarize_model({"waveform": waveform, "sample_rate": sample_rate})
+                    
+                    # 转换diarization结果为WhisperX格式
+                    diarize_segments = []
+                    for turn, _, speaker in diarization.itertracks(yield_label=True):
+                        diarize_segments.append({
+                            "start": turn.start,
+                            "end": turn.end,
+                            "speaker": speaker
+                        })
+                    
                     result = whisperx.assign_word_speakers(diarize_segments, result)
                     speaker_success = True
                     logger.info("✅ 说话人识别完成")
