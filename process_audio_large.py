@@ -13,6 +13,8 @@ import logging
 from pathlib import Path
 import numpy as np
 from pyannote.audio import Pipeline
+import subprocess
+import shutil
 
 # 禁用TF32以避免精度和兼容性问题
 torch.backends.cuda.matmul.allow_tf32 = False
@@ -22,8 +24,31 @@ torch.backends.cudnn.allow_tf32 = False
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+def ensure_ffmpeg():
+    """确保ffmpeg已安装"""
+    if shutil.which('ffmpeg') is None:
+        logger.info("🔧 未找到ffmpeg，正在自动安装...")
+        try:
+            # 尝试使用apt安装
+            subprocess.run(['apt', 'update'], check=True, capture_output=True)
+            subprocess.run(['apt', 'install', '-y', 'ffmpeg'], check=True, capture_output=True)
+            logger.info("✅ ffmpeg安装成功")
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            try:
+                # 如果apt失败，尝试conda
+                subprocess.run(['conda', 'install', '-c', 'conda-forge', 'ffmpeg', '-y'], check=True, capture_output=True)
+                logger.info("✅ ffmpeg通过conda安装成功")
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                logger.error("❌ 无法自动安装ffmpeg，请手动安装")
+                logger.info("💡 手动安装命令: apt install -y ffmpeg 或 conda install -c conda-forge ffmpeg")
+                raise RuntimeError("ffmpeg未安装且无法自动安装")
+    else:
+        logger.info("✅ ffmpeg已安装")
+
 class HighPrecisionAudioProcessor:
     def __init__(self):
+        # 确保ffmpeg已安装
+        ensure_ffmpeg()
         self.device = self._setup_device()
         self.model = None
         self.align_model = None
