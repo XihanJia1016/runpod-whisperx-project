@@ -111,7 +111,6 @@ class HighPrecisionAudioProcessor:
             result = self.model.transcribe(
                 audio,
                 batch_size=self.config['batch_size'],
-                chunk_length=self.config['chunk_length'],
                 temperature=self.config['temperature'],
                 word_timestamps=self.config['word_timestamps'],
                 vad_filter=self.config['vad_filter']
