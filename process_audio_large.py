@@ -24,6 +24,43 @@ torch.backends.cudnn.allow_tf32 = False
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+def setup_cuda_environment():
+    """设置CUDA环境变量修复cuDNN问题"""
+    cuda_paths = [
+        "/usr/local/cuda/lib64",
+        "/usr/local/cuda-11.8/lib64", 
+        "/usr/local/cuda-11.7/lib64",
+        "/usr/local/cuda-11.6/lib64",
+        "/usr/lib/x86_64-linux-gnu",
+        "/opt/conda/lib"
+    ]
+    
+    # 检查PyTorch信息
+    logger.info(f"🔧 PyTorch版本: {torch.__version__}")
+    if torch.cuda.is_available():
+        logger.info(f"🔧 CUDA版本: {torch.version.cuda}")
+        logger.info(f"🔧 cuDNN版本: {torch.backends.cudnn.version()}")
+    
+    # 设置LD_LIBRARY_PATH
+    current_path = os.environ.get('LD_LIBRARY_PATH', '')
+    new_paths = []
+    
+    for path in cuda_paths:
+        if os.path.exists(path):
+            new_paths.append(path)
+            logger.info(f"✅ 找到CUDA库路径: {path}")
+    
+    if new_paths:
+        if current_path:
+            os.environ['LD_LIBRARY_PATH'] = ':'.join(new_paths) + ':' + current_path
+        else:
+            os.environ['LD_LIBRARY_PATH'] = ':'.join(new_paths)
+        logger.info(f"🔧 已设置LD_LIBRARY_PATH: {os.environ['LD_LIBRARY_PATH']}")
+    
+    # 设置额外的环境变量来稳定cuDNN
+    os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+    os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
+    
 def ensure_ffmpeg():
     """确保ffmpeg已安装"""
     if shutil.which('ffmpeg') is None:
@@ -47,6 +84,8 @@ def ensure_ffmpeg():
 
 class HighPrecisionAudioProcessor:
     def __init__(self):
+        # 设置CUDA环境修复cuDNN问题
+        setup_cuda_environment()
         # 确保ffmpeg已安装
         ensure_ffmpeg()
         self.device = self._setup_device()
