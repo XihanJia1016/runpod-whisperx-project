@@ -438,7 +438,7 @@ class HighPrecisionAudioProcessor:
             seed_map: 种子字典 {'S': [...], 'L': [...]}
             
         Returns:
-            list: 更新了speaker字段的all_ai_segments
+            tuple: (更新了speaker字段的all_ai_segments, 成功标志boolean)
         """
         logger.info("开始基于种子的说话人识别...")
         
@@ -449,7 +449,7 @@ class HighPrecisionAudioProcessor:
             
             if s_seed_embedding is None or l_seed_embedding is None:
                 logger.error("无法生成种子嵌入，跳过说话人识别")
-                return all_ai_segments
+                return all_ai_segments, False
             
             logger.info("✅ 种子嵌入生成完成")
             
@@ -488,22 +488,29 @@ class HighPrecisionAudioProcessor:
                             l_seed_embedding.reshape(1, -1)
                         )[0][0]
                         
-                        # 分配说话人
+                        # 分配说话人并记录真实置信度
                         if s_similarity > l_similarity:
                             segment['speaker'] = 'S'
+                            confidence = s_similarity
                         else:
                             segment['speaker'] = 'L'
+                            confidence = l_similarity
                         
-                        # 可选：记录置信度
-                        segment['speaker_confidence'] = max(s_similarity, l_similarity)
+                        # 记录真实的置信度
+                        segment['confidence'] = float(confidence)
+                        
+                        logger.debug(f"片段 {i}: S={s_similarity:.3f}, L={l_similarity:.3f}, "
+                                   f"分配={segment['speaker']}, 置信度={confidence:.3f}")
                         
                     else:
                         logger.warning(f"片段{i}无法生成嵌入，使用默认标记")
                         segment['speaker'] = 'UNKNOWN'
+                        segment['confidence'] = None
                         
                 except Exception as e:
                     logger.warning(f"处理片段{i}失败: {e}")
                     segment['speaker'] = 'UNKNOWN'
+                    segment['confidence'] = None
             
             # 统计结果
             s_count = sum(1 for seg in all_ai_segments if seg.get('speaker') == 'S')
@@ -512,11 +519,16 @@ class HighPrecisionAudioProcessor:
             
             logger.info(f"说话人识别结果: S={s_count}, L={l_count}, Unknown={unknown_count}")
             
-            return all_ai_segments
+            # 检查是否有足够的成功识别
+            success_rate = (s_count + l_count) / len(all_ai_segments) if all_ai_segments else 0
+            success = success_rate > 0.5  # 超过50%成功才算成功
+            
+            logger.info(f"识别成功率: {success_rate:.2%}, 整体状态: {'成功' if success else '失败'}")
+            return all_ai_segments, success
             
         except Exception as e:
             logger.error(f"基于种子的说话人识别失败: {e}")
-            return all_ai_segments
+            return all_ai_segments, False
     
     def _generate_seed_embedding(self, audio_data, seed_segments):
         """
@@ -589,13 +601,9 @@ class HighPrecisionAudioProcessor:
             
             # 生成嵌入 - 使用Model的正确调用方式
             with torch.no_grad():
-                # 构造输入格式
-                batch = {
-                    "waveform": audio_tensor, 
-                    "sample_rate": 16000
-                }
-                # 使用Model调用
-                embedding = self.embedding_model(batch)
+                # 直接传递tensor给模型，不使用dict格式
+                # pyannote Model期望直接接收waveform tensor
+                embedding = self.embedding_model(audio_tensor)
             
             # 转换为numpy
             if isinstance(embedding, torch.Tensor):
@@ -652,13 +660,15 @@ class HighPrecisionAudioProcessor:
                     
                     if seed_map.get('S') and seed_map.get('L'):
                         # 步骤B: 执行种子识别
-                        result["segments"] = self.perform_seed_based_diarization(
+                        result["segments"], speaker_success = self.perform_seed_based_diarization(
                             audio,  # 传入已加载的audio数据
                             result["segments"],
                             seed_map
                         )
-                        speaker_success = True
-                        logger.info("✅ 基于种子的说话人识别完成")
+                        if speaker_success:
+                            logger.info("✅ 基于种子的说话人识别完成")
+                        else:
+                            logger.warning("❌ 基于种子的说话人识别失败，使用回退方案")
                     else:
                         logger.warning(f"对话 {dyad_id}-{conversation_id}: 未能找到S和L的种子，将使用回退方案")
                         speaker_success = False
