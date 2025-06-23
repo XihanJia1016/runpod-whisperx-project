@@ -7,7 +7,7 @@
 import subprocess
 import sys
 
-def run_command(cmd, description):
+def run_command(cmd, description, ignore_errors=False):
     """运行命令"""
     print(f"🔧 {description}")
     print(f"执行: {cmd}")
@@ -17,6 +17,9 @@ def run_command(cmd, description):
         print(f"✅ {description} - 成功")
         return True
     except subprocess.CalledProcessError as e:
+        if ignore_errors:
+            print(f"⚠️ {description} - 忽略错误")
+            return True
         print(f"❌ {description} - 失败")
         print(f"错误: {e.stderr[:200]}...")
         return False

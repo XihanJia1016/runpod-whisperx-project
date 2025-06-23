@@ -1,0 +1,30 @@
+# WhisperX 3.3.4 兼容的简化依赖文件
+# 解决所有版本冲突
+
+# 核心依赖 - 让pip自动解决版本
+numpy>=2.0.2
+pandas>=2.0.0
+scikit-learn>=1.3.0
+
+# 音频处理
+librosa>=0.10.0
+soundfile>=0.12.0
+
+# PyTorch - 兼容whisperx要求
+torch>=2.5.1
+torchaudio>=2.5.1
+torchvision>=0.20.1
+
+# NLP
+transformers>=4.35.0
+accelerate>=0.20.0
+
+# 说话人识别 - 兼容whisperx要求
+pyannote.audio>=3.3.2
+
+# WhisperX - 核心组件
+whisperx==3.3.4
+
+# 工具
+tqdm>=4.65.0
+omegaconf>=2.3.0
