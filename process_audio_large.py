@@ -938,16 +938,16 @@ class HighPrecisionAudioProcessor:
                 )
                 logger.info("✅ 强制对齐完成")
             
-            # 4. 基于种子的说话人识别 (新流程)
+            # 4. 基于种子的说话人识别 (新流程) - 使用"用时加载，用完即毁"架构
             speaker_success = False
-            if self.embedding_model and golden_turns_df is not None:
-                logger.info("开始基于种子的说话人识别...")
+            if golden_turns_df is not None:
+                logger.info("开始基于种子的说话人识别（动态模型加载）...")
                 try:
                     # 步骤A: 找到种子片段
                     seed_map = self._find_seed_segments(golden_turns_df, result["segments"])
                     
                     if seed_map.get('S') and seed_map.get('L'):
-                        # 步骤B: 执行种子识别
+                        # 步骤B: 执行种子识别（使用动态模型加载）
                         result["segments"], speaker_success = self.perform_seed_based_diarization(
                             audio,  # 传入已加载的audio数据
                             result["segments"],
@@ -965,7 +965,7 @@ class HighPrecisionAudioProcessor:
                     logger.error(f"❌ 对话 {dyad_id}-{conversation_id}: 基于种子的说话人识别失败: {e}")
                     speaker_success = False
             else:
-                logger.warning("嵌入模型未加载或未提供黄金文本，跳过说话人识别")
+                logger.warning("未提供黄金文本，跳过说话人识别")
                 speaker_success = False
             
             # 5. 处理和格式化结果
