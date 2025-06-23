@@ -19,8 +19,9 @@ torchvision>=0.20.1
 transformers>=4.35.0
 accelerate>=0.20.0
 
-# 说话人识别 - 兼容whisperx要求
+# 说话人识别 - 现代兼容版本
 pyannote.audio>=3.3.2
+speechbrain>=0.5.0
 
 # WhisperX - 核心组件
 whisperx==3.3.4

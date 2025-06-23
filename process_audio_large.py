@@ -452,17 +452,16 @@ class HighPrecisionAudioProcessor:
         embedding_model = None
         
         try:
-            # 动态加载模型
-            logger.info("🔄 动态加载嵌入模型...")
+            # 动态加载现代嵌入模型
+            logger.info("🔄 动态加载SpeechBrain嵌入模型...")
             
-            hf_token = os.getenv('HF_TOKEN')
-            from pyannote.audio import Model
+            # 从 speechbrain 加载一个强大的、兼容性好的说话人嵌入模型
+            from speechbrain.inference.speaker import EncoderClassifier
             
-            embedding_model = Model.from_pretrained(
-                "pyannote/embedding",
-                use_auth_token=hf_token
-            )
-            embedding_model = embedding_model.to(self.device)
+            embedding_model = EncoderClassifier.from_hparams(
+                source="speechbrain/spkrec-ecapa-voxceleb",
+                savedir=os.path.join('/workspace/cache', 'speechbrain_models')
+            ).to(self.device)
             
             logger.info(f"✅ 嵌入模型动态加载完成，处理{len(segments_to_embed)}个片段")
             
@@ -496,13 +495,14 @@ class HighPrecisionAudioProcessor:
                     if self.device == "cuda":
                         audio_tensor = audio_tensor.cuda()
                     
-                    # 生成嵌入
+                    # 生成嵌入 - speechbrain 模型直接接收音频张量和其相对长度
                     with torch.no_grad():
-                        embedding = embedding_model(audio_tensor)
+                        wav_lens = torch.tensor([1.0], device=self.device)  # 1.0 表示使用完整长度
+                        embedding = embedding_model.encode_batch(audio_tensor, wav_lens=wav_lens)
                     
-                    # 转换为numpy
+                    # 转换为numpy - 移除所有大小为1的维度，然后展平
                     if isinstance(embedding, torch.Tensor):
-                        embedding = embedding.cpu().numpy()
+                        embedding = embedding.squeeze().cpu().numpy()
                     
                     if embedding is not None:
                         embeddings.append(embedding)
@@ -560,13 +560,14 @@ class HighPrecisionAudioProcessor:
             if self.device == "cuda":
                 audio_tensor = audio_tensor.cuda()
             
-            # 生成嵌入
+            # 生成嵌入 - speechbrain 模型调用方式
             with torch.no_grad():
-                embedding = embedding_model(audio_tensor)
+                wav_lens = torch.tensor([1.0], device=self.device)  # 1.0 表示使用完整长度
+                embedding = embedding_model.encode_batch(audio_tensor, wav_lens=wav_lens)
             
-            # 转换为numpy
+            # 转换为numpy - 移除所有大小为1的维度，然后展平
             if isinstance(embedding, torch.Tensor):
-                embedding = embedding.cpu().numpy()
+                embedding = embedding.squeeze().cpu().numpy()
             
             return embedding
             
@@ -669,14 +670,13 @@ class HighPrecisionAudioProcessor:
             main_embedding_model = None
             
             try:
-                hf_token = os.getenv('HF_TOKEN')
-                from pyannote.audio import Model
+                # 使用 speechbrain 现代嵌入模型
+                from speechbrain.inference.speaker import EncoderClassifier
                 
-                main_embedding_model = Model.from_pretrained(
-                    "pyannote/embedding",
-                    use_auth_token=hf_token
-                )
-                main_embedding_model = main_embedding_model.to(self.device)
+                main_embedding_model = EncoderClassifier.from_hparams(
+                    source="speechbrain/spkrec-ecapa-voxceleb",
+                    savedir=os.path.join('/workspace/cache', 'speechbrain_models')
+                ).to(self.device)
                 
                 logger.info("✅ 主要识别模型加载完成")
                 
