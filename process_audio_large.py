@@ -260,11 +260,45 @@ class HighPrecisionAudioProcessor:
             # )
             
             # 加载嵌入模型用于种子识别
-            self.embedding_model = Pipeline.from_pretrained(
-                "pyannote/embedding",
-                use_auth_token=hf_token
-            ).to(self.device)
-            logger.info("✅ 说话人嵌入模型加载完成")
+            try:
+                logger.info("⏳ 正在下载和加载 pyannote/embedding 模型...")
+                self.embedding_model = Pipeline.from_pretrained(
+                    "pyannote/embedding",
+                    use_auth_token=hf_token
+                )
+                
+                if self.embedding_model is None:
+                    raise ValueError("嵌入模型加载返回None")
+                    
+                # 移动到设备
+                self.embedding_model = self.embedding_model.to(self.device)
+                logger.info("✅ 说话人嵌入模型加载完成")
+                
+            except Exception as e:
+                logger.error(f"嵌入模型加载失败: {e}")
+                logger.info("🔄 尝试清除缓存后重新加载...")
+                
+                # 清除可能损坏的缓存
+                import shutil
+                cache_dir = os.path.expanduser("~/.cache/huggingface/transformers")
+                if os.path.exists(cache_dir):
+                    try:
+                        shutil.rmtree(cache_dir)
+                        logger.info("✅ 缓存清除完成")
+                    except:
+                        pass
+                
+                # 重新尝试加载
+                try:
+                    self.embedding_model = Pipeline.from_pretrained(
+                        "pyannote/embedding",
+                        use_auth_token=hf_token,
+                        cache_dir="/tmp/huggingface_cache"  # 使用临时目录
+                    ).to(self.device)
+                    logger.info("✅ 说话人嵌入模型重新加载成功")
+                except Exception as e2:
+                    logger.error(f"重新加载也失败: {e2}")
+                    raise e2
             
             # 将原来的diarize_model设为None
             self.diarize_model = None
