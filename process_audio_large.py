@@ -84,8 +84,8 @@ def check_and_fix_environment():
     else:
         print("✅ 环境检查通过")
 
-# 在导入其他模块之前检查环境
-check_and_fix_environment()
+# 移除自动环境检查，避免在RunPod中卡住
+# check_and_fix_environment()  # 已禁用，防止交互式输入导致卡死
 
 # 禁用TF32以避免精度和兼容性问题
 torch.backends.cuda.matmul.allow_tf32 = False
