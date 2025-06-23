@@ -1,19 +1,18 @@
-# 核心依赖 - 移除版本固定，让pip自动解决
-numpy>=2.0.0
-pandas>=2.0.0
-librosa>=0.10.0
-soundfile>=0.12.0
-torchaudio>=2.0.0
+# 核心依赖 - 使用预装的PyTorch
+numpy
+pandas
+librosa
+soundfile
 
-# Transformers和加速库
-transformers>=4.35.0
-accelerate>=0.20.0
+# Transformers (使用较小版本)
+transformers
+accelerate
 
 # WhisperX (最新版本)
 git+https://github.com/m-bain/whisperx.git
 
 # 说话人识别
-pyannote.audio>=3.1.0
+pyannote.audio
 
 # 其他工具
-tqdm>=4.65.0
+tqdm

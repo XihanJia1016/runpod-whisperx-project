@@ -15,6 +15,8 @@ import numpy as np
 from pyannote.audio import Pipeline
 import subprocess
 import shutil
+import difflib
+from sklearn.metrics.pairwise import cosine_similarity
 
 # 禁用TF32以避免精度和兼容性问题
 torch.backends.cuda.matmul.allow_tf32 = False
@@ -127,6 +129,7 @@ class HighPrecisionAudioProcessor:
         self.align_model = None
         self.metadata = None
         self.diarize_model = None
+        self.embedding_model = None
         
         # 高精度配置
         self.config = {
@@ -173,21 +176,29 @@ class HighPrecisionAudioProcessor:
             )
             logger.info("✅ 对齐模型加载完成")
             
-            # 3. 加载说话人识别模型
-            logger.info("加载说话人识别模型...")
+            # 3. 加载说话人嵌入模型 (替换说话人识别模型)
+            logger.info("加载说话人嵌入模型...")
             # 获取HuggingFace token (需要设置环境变量 HF_TOKEN)
             hf_token = os.getenv('HF_TOKEN')
             if not hf_token:
-                logger.warning("⚠️ 未设置HF_TOKEN环境变量，说话人识别可能失败")
+                logger.warning("⚠️ 未设置HF_TOKEN环境变量，说话人嵌入可能失败")
                 logger.info("💡 请运行: export HF_TOKEN='your_token_here'")
             
-            self.diarize_model = Pipeline.from_pretrained(
-                "pyannote/speaker-diarization-3.1", 
+            # 注释掉原来的diarization模型
+            # self.diarize_model = Pipeline.from_pretrained(
+            #     "pyannote/speaker-diarization-3.1", 
+            #     use_auth_token=hf_token
+            # )
+            
+            # 加载嵌入模型用于种子识别
+            self.embedding_model = Pipeline.from_pretrained(
+                "pyannote/embedding",
                 use_auth_token=hf_token
-            )
-            if self.device == "cuda":
-                self.diarize_model.to(torch.device("cuda"))
-            logger.info("✅ 说话人识别模型加载完成")
+            ).to(self.device)
+            logger.info("✅ 说话人嵌入模型加载完成")
+            
+            # 将原来的diarize_model设为None
+            self.diarize_model = None
             
             return True
             
@@ -203,7 +214,283 @@ class HighPrecisionAudioProcessor:
         milliseconds = int((seconds % 1) * 1000)
         return f"{hours:02d}:{minutes:02d}:{secs:02d},{milliseconds:03d}"
     
-    def process_single_file(self, audio_path, dyad_id, conversation_id):
+    def _clean_text_for_comparison(self, text):
+        """清理文本以便更好地进行比较"""
+        if pd.isna(text):
+            return ""
+        import re
+        return re.sub(r'\s+', ' ', str(text).strip().lower())
+    
+    def _find_seed_segments(self, golden_turns_df, ai_segments):
+        """
+        根据黄金文本，从AI转录片段中找到每个说话人的种子片段
+        
+        Args:
+            golden_turns_df: 已筛选的黄金文本DataFrame (当前dyad和conversation)
+            ai_segments: 当前对话的所有AI转录片段列表
+            
+        Returns:
+            dict: {'S': [segment1, segment2, ...], 'L': [segment3, segment4, ...]}
+        """
+        logger.info("开始寻找说话人种子片段...")
+        
+        seed_map = {'S': [], 'L': []}
+        
+        try:
+            # 找到S和L的第一个目标文本
+            s_turns = golden_turns_df[golden_turns_df['role'] == 'S']
+            l_turns = golden_turns_df[golden_turns_df['role'] == 'L']
+            
+            if s_turns.empty or l_turns.empty:
+                logger.warning("未找到S或L的黄金文本，无法生成种子")
+                return seed_map
+            
+            # 获取第一个目标文本
+            s_target_text = self._clean_text_for_comparison(s_turns.iloc[0]['text'])
+            l_target_text = self._clean_text_for_comparison(l_turns.iloc[0]['text'])
+            
+            logger.info(f"S目标文本: {s_target_text[:50]}...")
+            logger.info(f"L目标文本: {l_target_text[:50]}...")
+            
+            # 为S找种子片段
+            s_seed_segments = self._find_best_matching_segments(s_target_text, ai_segments)
+            if s_seed_segments:
+                seed_map['S'] = s_seed_segments
+                logger.info(f"找到S的种子片段: {len(s_seed_segments)}个")
+            
+            # 为L找种子片段 (排除已用于S的片段)
+            remaining_segments = [seg for seg in ai_segments if seg not in s_seed_segments]
+            l_seed_segments = self._find_best_matching_segments(l_target_text, remaining_segments)
+            if l_seed_segments:
+                seed_map['L'] = l_seed_segments
+                logger.info(f"找到L的种子片段: {len(l_seed_segments)}个")
+            
+            return seed_map
+            
+        except Exception as e:
+            logger.error(f"寻找种子片段失败: {e}")
+            return {'S': [], 'L': []}
+    
+    def _find_best_matching_segments(self, target_text, ai_segments):
+        """
+        使用贪心算法找到与目标文本最匹配的AI片段组合
+        
+        Args:
+            target_text: 清理后的目标文本
+            ai_segments: 可用的AI片段列表
+            
+        Returns:
+            list: 最佳匹配的片段列表
+        """
+        if not target_text or not ai_segments:
+            return []
+        
+        best_match_ratio = 0
+        best_match_segments = []
+        
+        # 贪心搜索：尝试不同的片段组合
+        for start_idx in range(len(ai_segments)):
+            temp_text = ""
+            temp_segments = []
+            
+            for end_idx in range(start_idx, min(start_idx + 5, len(ai_segments))):  # 最多组合5个片段
+                segment = ai_segments[end_idx]
+                temp_segments.append(segment)
+                temp_text += " " + self._clean_text_for_comparison(segment.get('text', ''))
+                temp_text = temp_text.strip()
+                
+                # 计算相似度
+                if temp_text:
+                    similarity = difflib.SequenceMatcher(None, temp_text, target_text).ratio()
+                    
+                    if similarity > best_match_ratio:
+                        best_match_ratio = similarity
+                        best_match_segments = temp_segments.copy()
+                    
+                    # 如果相似度开始下降，提前停止
+                    if len(temp_segments) > 1 and similarity < best_match_ratio * 0.8:
+                        break
+        
+        logger.info(f"最佳匹配相似度: {best_match_ratio:.3f}")
+        return best_match_segments
+    
+    def perform_seed_based_diarization(self, audio_data, all_ai_segments, seed_map):
+        """
+        基于种子片段进行说话人识别的核心函数
+        
+        Args:
+            audio_data: whisperx.load_audio()返回的numpy数组
+            all_ai_segments: 当前对话的所有AI转录片段
+            seed_map: 种子字典 {'S': [...], 'L': [...]}
+            
+        Returns:
+            list: 更新了speaker字段的all_ai_segments
+        """
+        logger.info("开始基于种子的说话人识别...")
+        
+        try:
+            # 1. 生成种子指纹
+            s_seed_embedding = self._generate_seed_embedding(audio_data, seed_map['S'])
+            l_seed_embedding = self._generate_seed_embedding(audio_data, seed_map['L'])
+            
+            if s_seed_embedding is None or l_seed_embedding is None:
+                logger.error("无法生成种子嵌入，跳过说话人识别")
+                return all_ai_segments
+            
+            logger.info("✅ 种子嵌入生成完成")
+            
+            # 2. 识别所有片段
+            sample_rate = 16000  # WhisperX使用16kHz
+            
+            for i, segment in enumerate(all_ai_segments):
+                try:
+                    # 提取音频片段
+                    start_sample = int(segment.get('start', 0) * sample_rate)
+                    end_sample = int(segment.get('end', 0) * sample_rate)
+                    
+                    # 确保索引有效
+                    start_sample = max(0, start_sample)
+                    end_sample = min(len(audio_data), end_sample)
+                    
+                    if start_sample >= end_sample:
+                        logger.warning(f"片段{i}时间戳无效，跳过")
+                        segment['speaker'] = 'UNKNOWN'
+                        continue
+                    
+                    audio_segment = audio_data[start_sample:end_sample]
+                    
+                    # 生成片段嵌入
+                    segment_embedding = self._generate_single_embedding(audio_segment)
+                    
+                    if segment_embedding is not None:
+                        # 计算与种子的相似度
+                        s_similarity = cosine_similarity(
+                            segment_embedding.reshape(1, -1), 
+                            s_seed_embedding.reshape(1, -1)
+                        )[0][0]
+                        
+                        l_similarity = cosine_similarity(
+                            segment_embedding.reshape(1, -1), 
+                            l_seed_embedding.reshape(1, -1)
+                        )[0][0]
+                        
+                        # 分配说话人
+                        if s_similarity > l_similarity:
+                            segment['speaker'] = 'S'
+                        else:
+                            segment['speaker'] = 'L'
+                        
+                        # 可选：记录置信度
+                        segment['speaker_confidence'] = max(s_similarity, l_similarity)
+                        
+                    else:
+                        logger.warning(f"片段{i}无法生成嵌入，使用默认标记")
+                        segment['speaker'] = 'UNKNOWN'
+                        
+                except Exception as e:
+                    logger.warning(f"处理片段{i}失败: {e}")
+                    segment['speaker'] = 'UNKNOWN'
+            
+            # 统计结果
+            s_count = sum(1 for seg in all_ai_segments if seg.get('speaker') == 'S')
+            l_count = sum(1 for seg in all_ai_segments if seg.get('speaker') == 'L')
+            unknown_count = sum(1 for seg in all_ai_segments if seg.get('speaker') == 'UNKNOWN')
+            
+            logger.info(f"说话人识别结果: S={s_count}, L={l_count}, Unknown={unknown_count}")
+            
+            return all_ai_segments
+            
+        except Exception as e:
+            logger.error(f"基于种子的说话人识别失败: {e}")
+            return all_ai_segments
+    
+    def _generate_seed_embedding(self, audio_data, seed_segments):
+        """
+        为种子片段生成平均嵌入向量
+        
+        Args:
+            audio_data: 完整音频数据
+            seed_segments: 种子片段列表
+            
+        Returns:
+            numpy.ndarray: 平均嵌入向量，如果失败则返回None
+        """
+        if not seed_segments:
+            return None
+        
+        sample_rate = 16000
+        embeddings = []
+        
+        for segment in seed_segments:
+            try:
+                start_sample = int(segment.get('start', 0) * sample_rate)
+                end_sample = int(segment.get('end', 0) * sample_rate)
+                
+                # 确保索引有效
+                start_sample = max(0, start_sample)
+                end_sample = min(len(audio_data), end_sample)
+                
+                if start_sample >= end_sample:
+                    continue
+                
+                audio_segment = audio_data[start_sample:end_sample]
+                embedding = self._generate_single_embedding(audio_segment)
+                
+                if embedding is not None:
+                    embeddings.append(embedding)
+                    
+            except Exception as e:
+                logger.warning(f"种子片段嵌入生成失败: {e}")
+                continue
+        
+        if embeddings:
+            # 计算平均嵌入
+            mean_embedding = np.mean(embeddings, axis=0)
+            return mean_embedding
+        else:
+            return None
+    
+    def _generate_single_embedding(self, audio_segment):
+        """
+        为单个音频片段生成嵌入向量
+        
+        Args:
+            audio_segment: 音频片段 (numpy array)
+            
+        Returns:
+            numpy.ndarray: 嵌入向量，如果失败则返回None
+        """
+        try:
+            # 确保音频长度足够 (至少0.1秒)
+            min_length = int(0.1 * 16000)
+            if len(audio_segment) < min_length:
+                # 如果太短，用零填充
+                audio_segment = np.pad(audio_segment, (0, min_length - len(audio_segment)))
+            
+            # 转换为PyTorch tensor
+            audio_tensor = torch.from_numpy(audio_segment).float().unsqueeze(0)
+            
+            if self.device == "cuda":
+                audio_tensor = audio_tensor.cuda()
+            
+            # 生成嵌入
+            with torch.no_grad():
+                embedding = self.embedding_model({
+                    "waveform": audio_tensor, 
+                    "sample_rate": 16000
+                })
+            
+            # 转换为numpy
+            if isinstance(embedding, torch.Tensor):
+                embedding = embedding.cpu().numpy()
+            
+            return embedding.flatten()
+            
+        except Exception as e:
+            logger.warning(f"生成单个嵌入失败: {e}")
+            return None
+    
+    def process_single_file(self, audio_path, dyad_id, conversation_id, golden_turns_df=None):
         """处理单个音频文件"""
         logger.info(f"开始处理: {Path(audio_path).name}")
         start_time = time.time()
@@ -238,32 +525,32 @@ class HighPrecisionAudioProcessor:
                 )
                 logger.info("✅ 强制对齐完成")
             
-            # 4. 说话人识别
+            # 4. 基于种子的说话人识别 (新流程)
             speaker_success = False
-            if self.diarize_model:
-                logger.info("开始说话人识别...")
+            if self.embedding_model and golden_turns_df is not None:
+                logger.info("开始基于种子的说话人识别...")
                 try:
-                    # 使用正确的API调用方式
-                    import torchaudio
-                    waveform, sample_rate = torchaudio.load(audio_path)
-                    diarization = self.diarize_model({"waveform": waveform, "sample_rate": sample_rate})
+                    # 步骤A: 找到种子片段
+                    seed_map = self._find_seed_segments(golden_turns_df, result["segments"])
                     
-                    # 转换diarization结果为WhisperX格式
-                    diarize_segments = []
-                    for turn, _, speaker in diarization.itertracks(yield_label=True):
-                        diarize_segments.append({
-                            "start": turn.start,
-                            "end": turn.end,
-                            "speaker": speaker
-                        })
-                    
-                    result = whisperx.assign_word_speakers(diarize_segments, result)
-                    speaker_success = True
-                    logger.info("✅ 说话人识别完成")
+                    if seed_map.get('S') and seed_map.get('L'):
+                        # 步骤B: 执行种子识别
+                        result["segments"] = self.perform_seed_based_diarization(
+                            audio,  # 传入已加载的audio数据
+                            result["segments"],
+                            seed_map
+                        )
+                        speaker_success = True
+                        logger.info("✅ 基于种子的说话人识别完成")
+                    else:
+                        logger.warning(f"对话 {dyad_id}-{conversation_id}: 未能找到S和L的种子，将使用回退方案")
+                        speaker_success = False
+                        
                 except Exception as e:
-                    logger.warning(f"说话人识别失败: {e}")
+                    logger.error(f"❌ 对话 {dyad_id}-{conversation_id}: 基于种子的说话人识别失败: {e}")
                     speaker_success = False
             else:
+                logger.warning("嵌入模型未加载或未提供黄金文本，跳过说话人识别")
                 speaker_success = False
             
             # 5. 处理和格式化结果
@@ -301,13 +588,20 @@ class HighPrecisionAudioProcessor:
             # 处理说话人信息
             if speaker_success and "speaker" in seg:
                 speaker_raw = seg["speaker"]
-                # 简化说话人标识
-                if "SPEAKER_00" in speaker_raw:
+                # 处理新的S/L标识系统
+                if speaker_raw == 'S':
                     speaker_name = "Speaker_A"
-                elif "SPEAKER_01" in speaker_raw:
+                    speaker_raw = "SPEAKER_00"
+                elif speaker_raw == 'L':
+                    speaker_name = "Speaker_B"
+                    speaker_raw = "SPEAKER_01"
+                elif "SPEAKER_00" in str(speaker_raw):
+                    speaker_name = "Speaker_A"
+                elif "SPEAKER_01" in str(speaker_raw):
                     speaker_name = "Speaker_B"
                 else:
-                    speaker_name = f"Speaker_{speaker_raw.split('_')[-1]}"
+                    # 处理其他情况
+                    speaker_name = f"Speaker_{str(speaker_raw).split('_')[-1]}"
             else:
                 # 简单交替分配
                 speaker_name = f"Speaker_{'A' if i % 2 == 0 else 'B'}"
@@ -376,9 +670,189 @@ class HighPrecisionAudioProcessor:
             del self.align_model
         if self.diarize_model:
             del self.diarize_model
+        if self.embedding_model:
+            del self.embedding_model
         
         gc.collect()
         if self.device == "cuda":
             torch.cuda.empty_cache()
         
         logger.info("内存清理完成")
+
+
+def load_golden_text_data(golden_text_path):
+    """加载黄金标准文本数据"""
+    try:
+        logger.info(f"加载黄金文本数据: {golden_text_path}")
+        df = pd.read_csv(golden_text_path)
+        df.columns = df.columns.str.strip()  # 清理列名
+        
+        # 确保必要的列存在
+        required_cols = ['dyad', 'conversation', 'role', 'text']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        
+        if missing_cols:
+            logger.error(f"黄金文本缺少必要列: {missing_cols}")
+            logger.info(f"可用列: {list(df.columns)}")
+            return None
+        
+        logger.info(f"✅ 黄金文本加载完成: {len(df)}行数据")
+        logger.info(f"包含对话: {df['dyad'].nunique()}个dyad, {df['conversation'].nunique()}个conversation")
+        
+        return df
+        
+    except Exception as e:
+        logger.error(f"加载黄金文本失败: {e}")
+        return None
+
+
+def process_conversations_with_golden_text(
+    audio_dir, 
+    golden_text_path, 
+    output_dir, 
+    conversation_mapping=None
+):
+    """
+    使用黄金文本数据批量处理对话
+    
+    Args:
+        audio_dir: 音频文件目录
+        golden_text_path: 黄金文本CSV文件路径
+        output_dir: 输出目录
+        conversation_mapping: 音频文件名到(dyad, conversation)的映射字典
+                            如果为None，将尝试从文件名解析
+    """
+    
+    # 加载黄金文本
+    golden_df = load_golden_text_data(golden_text_path)
+    if golden_df is None:
+        logger.error("无法加载黄金文本，终止处理")
+        return
+    
+    # 创建输出目录
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # 初始化处理器
+    processor = HighPrecisionAudioProcessor()
+    
+    try:
+        # 加载模型
+        if not processor.load_models():
+            logger.error("模型加载失败，终止处理")
+            return
+        
+        # 获取音频文件列表
+        audio_files = []
+        for ext in ['.wav', '.mp3', '.m4a', '.flac']:
+            audio_files.extend(Path(audio_dir).glob(f"*{ext}"))
+        
+        logger.info(f"找到 {len(audio_files)} 个音频文件")
+        
+        all_results = []
+        processed_count = 0
+        
+        for audio_file in audio_files:
+            try:
+                # 解析dyad和conversation
+                if conversation_mapping:
+                    if audio_file.name in conversation_mapping:
+                        dyad_id, conversation_id = conversation_mapping[audio_file.name]
+                    else:
+                        logger.warning(f"文件 {audio_file.name} 不在映射中，跳过")
+                        continue
+                else:
+                    # 尝试从文件名解析 (假设格式为 dyad_X_conversation_Y.wav)
+                    try:
+                        parts = audio_file.stem.split('_')
+                        dyad_id = int(parts[1])
+                        conversation_id = int(parts[3])
+                    except (ValueError, IndexError):
+                        logger.warning(f"无法从文件名解析dyad和conversation: {audio_file.name}")
+                        continue
+                
+                # 过滤对应的黄金文本
+                golden_turns_df = golden_df[
+                    (golden_df['dyad'] == dyad_id) & 
+                    (golden_df['conversation'] == conversation_id)
+                ].copy()
+                
+                if golden_turns_df.empty:
+                    logger.warning(f"对话 {dyad_id}-{conversation_id} 没有对应的黄金文本，跳过")
+                    continue
+                
+                logger.info(f"处理对话 {dyad_id}-{conversation_id}: {audio_file.name}")
+                logger.info(f"黄金文本轮次: {len(golden_turns_df)}")
+                
+                # 处理音频文件
+                segments = processor.process_single_file(
+                    str(audio_file), 
+                    dyad_id, 
+                    conversation_id, 
+                    golden_turns_df
+                )
+                
+                all_results.extend(segments)
+                processed_count += 1
+                
+                logger.info(f"✅ 完成处理 {dyad_id}-{conversation_id}: {len(segments)}个片段")
+                
+            except Exception as e:
+                logger.error(f"❌ 处理文件 {audio_file.name} 失败: {e}")
+                continue
+        
+        # 保存结果
+        if all_results:
+            output_file = os.path.join(output_dir, "combined_transcription_with_seed_diarization.csv")
+            results_df = pd.DataFrame(all_results)
+            results_df.to_csv(output_file, index=False, encoding='utf-8')
+            
+            logger.info(f"✅ 所有结果已保存到: {output_file}")
+            logger.info(f"总计处理: {processed_count}个对话, {len(all_results)}个片段")
+            
+            # 输出统计信息
+            if 'has_ai_speaker_detection' in results_df.columns:
+                success_count = results_df['has_ai_speaker_detection'].sum()
+                logger.info(f"说话人识别成功率: {success_count}/{processed_count} ({success_count/processed_count*100:.1f}%)")
+        else:
+            logger.warning("没有成功处理任何文件")
+    
+    finally:
+        # 清理
+        processor.cleanup()
+
+
+def main():
+    """主函数示例"""
+    
+    # 配置路径
+    audio_directory = "/path/to/your/audio/files"  # 需要根据实际情况修改
+    golden_text_file = "/Users/xihanjia/Library/CloudStorage/OneDrive-VrijeUniversiteitAmsterdam/project/4 text mining/text_data_output.csv"
+    output_directory = "/path/to/output"  # 需要根据实际情况修改
+    
+    # 可选：手动定义文件名映射
+    # conversation_mapping = {
+    #     "audio1.wav": (19, 4),
+    #     "audio2.wav": (33, 4),
+    #     # ...
+    # }
+    
+    logger.info("=== 开始批量处理音频文件 ===")
+    
+    # 检查黄金文本文件是否存在
+    if not os.path.exists(golden_text_file):
+        logger.error(f"黄金文本文件不存在: {golden_text_file}")
+        return
+    
+    # 开始处理
+    process_conversations_with_golden_text(
+        audio_dir=audio_directory,
+        golden_text_path=golden_text_file,
+        output_dir=output_directory,
+        conversation_mapping=None  # 使用自动解析
+    )
+    
+    logger.info("=== 处理完成 ===")
+
+
+if __name__ == "__main__":
+    main()
