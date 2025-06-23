@@ -1,0 +1,30 @@
+# 修复版本的依赖文件
+# 使用兼容的PyTorch版本组合
+
+# 核心PyTorch (固定兼容版本)
+torch==2.1.0
+torchaudio==2.1.0
+torchvision==0.16.0
+
+# 基础科学计算库
+numpy>=1.24.0,<2.0.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+
+# 音频处理
+librosa>=0.10.0
+soundfile>=0.12.0
+
+# Transformers (兼容版本)
+transformers>=4.35.0,<5.0.0
+accelerate>=0.20.0
+
+# 说话人识别 (固定版本避免冲突)
+pyannote.audio>=3.1.0,<4.0.0
+
+# WhisperX
+git+https://github.com/m-bain/whisperx.git
+
+# 其他必需工具
+tqdm>=4.65.0
+difflib2  # 用于文本相似度计算

@@ -1,5 +1,6 @@
 """
 RunPod WhisperX Large-v3 高精度音频处理脚本
+半自动种子识别说话人日志系统
 优化说话人识别和时间戳精度
 """
 
@@ -17,6 +18,74 @@ import subprocess
 import shutil
 import difflib
 from sklearn.metrics.pairwise import cosine_similarity
+
+# 环境检查和自动修复
+def check_and_fix_environment():
+    """检查环境并在需要时自动修复"""
+    
+    missing_packages = []
+    version_conflicts = []
+    
+    try:
+        import torch
+        import torchvision
+        
+        torch_version = torch.__version__
+        torchvision_version = torchvision.__version__
+        
+        # 检查版本兼容性
+        if not (torch_version.startswith('2.1.') and torchvision_version.startswith('0.16.')):
+            version_conflicts.append(f"PyTorch版本冲突: torch={torch_version}, torchvision={torchvision_version}")
+    except ImportError as e:
+        missing_packages.append(f"PyTorch: {e}")
+    
+    try:
+        import pyannote.audio
+    except ImportError as e:
+        missing_packages.append(f"pyannote.audio: {e}")
+    
+    try:
+        import whisperx
+    except ImportError as e:
+        missing_packages.append(f"whisperx: {e}")
+    
+    try:
+        from sklearn.metrics.pairwise import cosine_similarity
+    except ImportError as e:
+        missing_packages.append(f"scikit-learn: {e}")
+    
+    if missing_packages or version_conflicts:
+        print("❌ 环境检查发现问题:")
+        for issue in missing_packages + version_conflicts:
+            print(f"  - {issue}")
+        
+        print("\n🔧 自动修复建议:")
+        print("运行以下命令修复环境:")
+        print("  python setup_environment.py")
+        print("\n或者手动修复:")
+        print("  pip install -r requirements_stable.txt")
+        
+        # 询问是否自动修复
+        response = input("\n是否现在自动修复？(y/N): ")
+        if response.lower() in ['y', 'yes']:
+            print("🔄 开始自动修复...")
+            try:
+                import setup_environment
+                setup_environment.main()
+                print("✅ 环境修复完成，请重新运行脚本")
+                exit(0)
+            except Exception as e:
+                print(f"❌ 自动修复失败: {e}")
+                print("请手动运行: python setup_environment.py")
+                exit(1)
+        else:
+            print("请先修复环境问题后再运行脚本")
+            exit(1)
+    else:
+        print("✅ 环境检查通过")
+
+# 在导入其他模块之前检查环境
+check_and_fix_environment()
 
 # 禁用TF32以避免精度和兼容性问题
 torch.backends.cuda.matmul.allow_tf32 = False
