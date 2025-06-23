@@ -507,9 +507,9 @@ class HighPrecisionAudioProcessor:
                         max_similarity = max(s_similarity, l_similarity)
                         similarity_diff = abs(s_similarity - l_similarity)
                         
-                        # 设置门槛参数
-                        MIN_CONFIDENCE_THRESHOLD = 0.5  # 最小置信度门槛
-                        MIN_DIFFERENCE_THRESHOLD = 0.1  # 安全区门槛
+                        # 设置门槛参数（降低以获得更多成功分配）
+                        MIN_CONFIDENCE_THRESHOLD = 0.3  # 最小置信度门槛（从0.5降到0.3）
+                        MIN_DIFFERENCE_THRESHOLD = 0.05  # 安全区门槛（从0.1降到0.05）
                         
                         # 检查两个条件
                         confidence_sufficient = max_similarity > MIN_CONFIDENCE_THRESHOLD
@@ -524,8 +524,10 @@ class HighPrecisionAudioProcessor:
                                 segment['speaker'] = 'L'
                                 confidence = l_similarity
                             
-                            logger.debug(f"片段 {i}: S={s_similarity:.3f}, L={l_similarity:.3f}, "
-                                       f"差距={similarity_diff:.3f}, 分配={segment['speaker']}, 置信度={confidence:.3f}")
+                            # 成功分配，使用INFO级别日志（前几个片段）
+                            if i < 5:  # 只显示前5个片段的详细信息
+                                logger.info(f"✅ 片段 {i}: S={s_similarity:.3f}, L={l_similarity:.3f}, "
+                                           f"差距={similarity_diff:.3f}, 分配={segment['speaker']}, 置信度={confidence:.3f}")
                         else:
                             # 不满足条件，标记为UNKNOWN
                             segment['speaker'] = 'UNKNOWN'
@@ -537,8 +539,10 @@ class HighPrecisionAudioProcessor:
                             if not difference_sufficient:
                                 reason.append(f"差距过小({similarity_diff:.3f}<{MIN_DIFFERENCE_THRESHOLD})")
                             
-                            logger.debug(f"片段 {i}: S={s_similarity:.3f}, L={l_similarity:.3f}, "
-                                       f"标记=UNKNOWN, 原因: {', '.join(reason)}")
+                            # 失败原因使用WARNING级别，显示前几个
+                            if i < 5:  # 只显示前5个片段的详细信息
+                                logger.warning(f"❌ 片段 {i}: S={s_similarity:.3f}, L={l_similarity:.3f}, "
+                                             f"标记=UNKNOWN, 原因: {', '.join(reason)}")
                         
                         # 记录真实的置信度
                         segment['confidence'] = float(confidence)
@@ -553,10 +557,18 @@ class HighPrecisionAudioProcessor:
                     segment['speaker'] = 'UNKNOWN'
                     segment['confidence'] = None
             
-            # 统计结果
+            # 统计结果和相似度分布
             s_count = sum(1 for seg in all_ai_segments if seg.get('speaker') == 'S')
             l_count = sum(1 for seg in all_ai_segments if seg.get('speaker') == 'L')
             unknown_count = sum(1 for seg in all_ai_segments if seg.get('speaker') == 'UNKNOWN')
+            
+            # 统计置信度分布（用于调试门槛设置）
+            confidences = [seg.get('confidence', 0) for seg in all_ai_segments if seg.get('confidence') is not None]
+            if confidences:
+                avg_confidence = sum(confidences) / len(confidences)
+                max_confidence = max(confidences)
+                min_confidence = min(confidences)
+                logger.info(f"置信度统计: 平均={avg_confidence:.3f}, 最高={max_confidence:.3f}, 最低={min_confidence:.3f}")
             
             logger.info(f"说话人识别结果: S={s_count}, L={l_count}, Unknown={unknown_count}")
             
