@@ -503,49 +503,60 @@ class HighPrecisionAudioProcessor:
                             l_seed_embedding.reshape(1, -1)
                         )[0][0]
                         
-                        # 改进的说话人分配逻辑，使用双重门槛
-                        max_similarity = max(s_similarity, l_similarity)
-                        similarity_diff = abs(s_similarity - l_similarity)
+                        # 重构的说话人分配逻辑 - 分步决策流程
                         
-                        # 设置门槛参数（降低以获得更多成功分配）
-                        MIN_CONFIDENCE_THRESHOLD = 0.3  # 最小置信度门槛（从0.5降到0.3）
-                        MIN_DIFFERENCE_THRESHOLD = 0.05  # 安全区门槛（从0.1降到0.05）
+                        # 1. 定义阈值
+                        MIN_CONFIDENCE_THRESHOLD = 0.45  # 稍微降低最小置信度
+                        MIN_DIFFERENCE_THRESHOLD = 0.08  # 稍微降低差距要求
                         
-                        # 检查两个条件
-                        confidence_sufficient = max_similarity > MIN_CONFIDENCE_THRESHOLD
-                        difference_sufficient = similarity_diff > MIN_DIFFERENCE_THRESHOLD
+                        confidence = 0.0
+                        assigned_speaker = 'UNKNOWN'
                         
-                        if confidence_sufficient and difference_sufficient:
-                            # 满足两个条件，可以安全分配说话人
-                            if s_similarity > l_similarity:
-                                segment['speaker'] = 'S'
-                                confidence = s_similarity
-                            else:
-                                segment['speaker'] = 'L'
-                                confidence = l_similarity
-                            
-                            # 成功分配，使用INFO级别日志（前几个片段）
-                            if i < 5:  # 只显示前5个片段的详细信息
-                                logger.info(f"✅ 片段 {i}: S={s_similarity:.3f}, L={l_similarity:.3f}, "
-                                           f"差距={similarity_diff:.3f}, 分配={segment['speaker']}, 置信度={confidence:.3f}")
+                        # 3. 确定胜出方
+                        if s_similarity > l_similarity:
+                            winner = 'S'
+                            winner_score = s_similarity
+                            loser_score = l_similarity
                         else:
-                            # 不满足条件，标记为UNKNOWN
-                            segment['speaker'] = 'UNKNOWN'
-                            confidence = max_similarity
-                            
-                            reason = []
-                            if not confidence_sufficient:
-                                reason.append(f"置信度不足({max_similarity:.3f}<{MIN_CONFIDENCE_THRESHOLD})")
-                            if not difference_sufficient:
-                                reason.append(f"差距过小({similarity_diff:.3f}<{MIN_DIFFERENCE_THRESHOLD})")
-                            
-                            # 失败原因使用WARNING级别，显示前几个
-                            if i < 5:  # 只显示前5个片段的详细信息
-                                logger.warning(f"❌ 片段 {i}: S={s_similarity:.3f}, L={l_similarity:.3f}, "
-                                             f"标记=UNKNOWN, 原因: {', '.join(reason)}")
+                            winner = 'L'
+                            winner_score = l_similarity
+                            loser_score = s_similarity
                         
-                        # 记录真实的置信度
+                        # 4. 分步验证结果是否可信
+                        # 条件1: 胜出方的分数是否达到了最低要求？
+                        is_confident_enough = winner_score >= MIN_CONFIDENCE_THRESHOLD
+                        
+                        # 条件2: 胜出方和失败方的分数差距是否足够大？
+                        is_distinct_enough = (winner_score - loser_score) >= MIN_DIFFERENCE_THRESHOLD
+                        
+                        # 只有当两个条件都满足时，我们才接受这个结果
+                        if is_confident_enough and is_distinct_enough:
+                            assigned_speaker = winner
+                            confidence = winner_score
+                        else:
+                            # 否则，即使有一方分数更高，我们依然认为结果不可靠
+                            assigned_speaker = 'UNKNOWN'
+                            confidence = winner_score  # 依然可以记录最高分，但标签是UNKNOWN
+                        
+                        segment['speaker'] = assigned_speaker
                         segment['confidence'] = float(confidence)
+                        
+                        # 调试日志 - 显示前几个片段的详细信息
+                        if i < 5:
+                            if assigned_speaker != 'UNKNOWN':
+                                logger.info(f"✅ 片段 {i}: S={s_similarity:.3f}, L={l_similarity:.3f}, "
+                                           f"胜出={winner}({winner_score:.3f}), 差距={winner_score-loser_score:.3f}, "
+                                           f"分配={assigned_speaker}")
+                            else:
+                                reason = []
+                                if not is_confident_enough:
+                                    reason.append(f"置信度不足({winner_score:.3f}<{MIN_CONFIDENCE_THRESHOLD})")
+                                if not is_distinct_enough:
+                                    reason.append(f"差距不够({winner_score-loser_score:.3f}<{MIN_DIFFERENCE_THRESHOLD})")
+                                
+                                logger.warning(f"❌ 片段 {i}: S={s_similarity:.3f}, L={l_similarity:.3f}, "
+                                             f"胜出={winner}({winner_score:.3f}), 标记=UNKNOWN, "
+                                             f"原因: {', '.join(reason)}")
                         
                     else:
                         logger.warning(f"片段{i}无法生成嵌入，使用默认标记")
