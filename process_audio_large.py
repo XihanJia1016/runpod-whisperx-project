@@ -460,8 +460,9 @@ class HighPrecisionAudioProcessor:
             
             embedding_model = EncoderClassifier.from_hparams(
                 source="speechbrain/spkrec-ecapa-voxceleb",
-                savedir=os.path.join('/workspace/cache', 'speechbrain_models')
-            ).to(self.device)
+                savedir=os.path.join('/workspace/cache', 'speechbrain_models'),
+                run_opts={"device": self.device}  # 直接在加载时指定设备
+            )
             
             logger.info(f"✅ 嵌入模型动态加载完成，处理{len(segments_to_embed)}个片段")
             
@@ -669,8 +670,9 @@ class HighPrecisionAudioProcessor:
                 
                 main_embedding_model = EncoderClassifier.from_hparams(
                     source="speechbrain/spkrec-ecapa-voxceleb",
-                    savedir=os.path.join('/workspace/cache', 'speechbrain_models')
-                ).to(self.device)
+                    savedir=os.path.join('/workspace/cache', 'speechbrain_models'),
+                    run_opts={"device": self.device}  # 直接在加载时指定设备
+                )
                 
                 logger.info("✅ 主要识别模型加载完成")
                 
