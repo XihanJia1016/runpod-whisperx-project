@@ -260,73 +260,19 @@ class HighPrecisionAudioProcessor:
                     self.align_model = None
                     self.metadata = None
             
-            # 3. 加载说话人嵌入模型 (替换说话人识别模型)
-            logger.info("加载说话人嵌入模型...")
-            # 获取HuggingFace token (需要设置环境变量 HF_TOKEN)
+            # 3. 说话人嵌入模型将采用"用时加载，用完即毁"策略
+            logger.info("✅ 说话人嵌入模型将动态加载（用时加载，用完即毁）")
+            
+            # 验证HuggingFace token
             hf_token = os.getenv('HF_TOKEN')
             if not hf_token:
                 logger.warning("⚠️ 未设置HF_TOKEN环境变量，说话人嵌入可能失败")
                 logger.info("💡 请运行: export HF_TOKEN='your_token_here'")
+            else:
+                logger.info(f"🔑 HF_TOKEN已设置: {hf_token[:20]}...")
             
-            # 注释掉原来的diarization模型
-            # self.diarize_model = Pipeline.from_pretrained(
-            #     "pyannote/speaker-diarization-3.1", 
-            #     use_auth_token=hf_token
-            # )
-            
-            # 加载嵌入模型用于种子识别
-            try:
-                logger.info("⏳ 正在加载说话人嵌入模型...")
-                logger.info(f"🔑 使用Token: {hf_token[:20] if hf_token else 'None'}...")
-                logger.info(f"📱 目标设备: {self.device}")
-                
-                # 使用正确的方式加载embedding模型
-                from pyannote.audio import Model
-                
-                # 直接加载embedding模型，而不是Pipeline
-                self.embedding_model = Model.from_pretrained(
-                    "pyannote/embedding",
-                    use_auth_token=hf_token
-                )
-                
-                logger.info(f"🔍 模型类型: {type(self.embedding_model)}")
-                
-                if self.embedding_model is None:
-                    raise ValueError("嵌入模型加载返回None")
-                    
-                # 移动到设备
-                logger.info("📱 移动模型到设备...")
-                self.embedding_model = self.embedding_model.to(self.device)
-                logger.info("✅ 说话人嵌入模型加载完成")
-                
-            except Exception as e:
-                logger.error(f"嵌入模型加载失败: {e}")
-                logger.info("🔄 尝试清除缓存后重新加载...")
-                
-                # 清除可能损坏的缓存
-                import shutil
-                cache_dir = os.path.expanduser("~/.cache/huggingface/transformers")
-                if os.path.exists(cache_dir):
-                    try:
-                        shutil.rmtree(cache_dir)
-                        logger.info("✅ 缓存清除完成")
-                    except:
-                        pass
-                
-                # 重新尝试加载
-                try:
-                    from pyannote.audio import Model
-                    self.embedding_model = Model.from_pretrained(
-                        "pyannote/embedding",
-                        use_auth_token=hf_token,
-                        cache_dir="/tmp/huggingface_cache"  # 使用临时目录
-                    ).to(self.device)
-                    logger.info("✅ 说话人嵌入模型重新加载成功")
-                except Exception as e2:
-                    logger.error(f"重新加载也失败: {e2}")
-                    raise e2
-            
-            # 将原来的diarize_model设为None
+            # 不再预加载embedding模型，改为动态加载
+            self.embedding_model = None
             self.diarize_model = None
             
             return True
@@ -492,6 +438,142 @@ class HighPrecisionAudioProcessor:
         
         return total_score / total_words
     
+    def _get_embedding_with_fresh_model(self, audio_data, segments_to_embed):
+        """
+        使用"用时加载，用完即毁"策略生成嵌入向量
+        
+        Args:
+            audio_data: Numpy数组格式的完整音频
+            segments_to_embed: 包含一个或多个片段字典的列表
+            
+        Returns:
+            numpy.ndarray: 平均嵌入向量，失败时返回None
+        """
+        embedding_model = None
+        
+        try:
+            # 动态加载模型
+            logger.info("🔄 动态加载嵌入模型...")
+            
+            hf_token = os.getenv('HF_TOKEN')
+            from pyannote.audio import Model
+            
+            embedding_model = Model.from_pretrained(
+                "pyannote/embedding",
+                use_auth_token=hf_token
+            )
+            embedding_model = embedding_model.to(self.device)
+            
+            logger.info(f"✅ 嵌入模型动态加载完成，处理{len(segments_to_embed)}个片段")
+            
+            # 生成嵌入向量
+            embeddings = []
+            sample_rate = 16000
+            
+            for i, segment in enumerate(segments_to_embed):
+                try:
+                    # 提取音频片段
+                    start_sample = int(segment.get('start', 0) * sample_rate)
+                    end_sample = int(segment.get('end', 0) * sample_rate)
+                    
+                    # 确保索引有效
+                    start_sample = max(0, start_sample)
+                    end_sample = min(len(audio_data), end_sample)
+                    
+                    if start_sample >= end_sample:
+                        continue
+                    
+                    audio_segment = audio_data[start_sample:end_sample]
+                    
+                    # 确保音频长度足够 (至少0.1秒)
+                    min_length = int(0.1 * sample_rate)
+                    if len(audio_segment) < min_length:
+                        audio_segment = np.pad(audio_segment, (0, min_length - len(audio_segment)))
+                    
+                    # 转换为PyTorch tensor
+                    audio_tensor = torch.from_numpy(audio_segment).float().unsqueeze(0)
+                    
+                    if self.device == "cuda":
+                        audio_tensor = audio_tensor.cuda()
+                    
+                    # 生成嵌入
+                    with torch.no_grad():
+                        embedding = embedding_model(audio_tensor)
+                    
+                    # 转换为numpy
+                    if isinstance(embedding, torch.Tensor):
+                        embedding = embedding.cpu().numpy()
+                    
+                    if embedding is not None:
+                        embeddings.append(embedding)
+                        
+                except Exception as e:
+                    logger.warning(f"片段{i}嵌入生成失败: {e}")
+                    continue
+            
+            if embeddings:
+                # 计算平均嵌入
+                mean_embedding = np.mean(embeddings, axis=0)
+                logger.info(f"✅ 成功生成平均嵌入向量，形状: {mean_embedding.shape}")
+                return mean_embedding
+            else:
+                logger.warning("❌ 没有成功生成任何嵌入向量")
+                return None
+                
+        except Exception as e:
+            logger.error(f"动态加载嵌入模型失败: {e}")
+            return None
+            
+        finally:
+            # 无论成功或失败都要清理模型
+            if embedding_model is not None:
+                logger.info("🗑️ 清理嵌入模型...")
+                del embedding_model
+                
+                # 清理CUDA缓存
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                
+                logger.info("✅ 嵌入模型已卸载和清理")
+    
+    def _generate_single_embedding_with_model(self, audio_segment, embedding_model):
+        """
+        使用已加载的模型为单个音频片段生成嵌入向量
+        
+        Args:
+            audio_segment: 音频片段 (numpy array)
+            embedding_model: 已加载的嵌入模型
+            
+        Returns:
+            numpy.ndarray: 嵌入向量，如果失败则返回None
+        """
+        try:
+            # 确保音频长度足够 (至少0.1秒)
+            min_length = int(0.1 * 16000)
+            if len(audio_segment) < min_length:
+                # 如果太短，用零填充
+                audio_segment = np.pad(audio_segment, (0, min_length - len(audio_segment)))
+            
+            # 转换为PyTorch tensor
+            audio_tensor = torch.from_numpy(audio_segment).float().unsqueeze(0)
+            
+            if self.device == "cuda":
+                audio_tensor = audio_tensor.cuda()
+            
+            # 生成嵌入
+            with torch.no_grad():
+                embedding = embedding_model(audio_tensor)
+            
+            # 转换为numpy
+            if isinstance(embedding, torch.Tensor):
+                embedding = embedding.cpu().numpy()
+            
+            return embedding
+            
+        except Exception as e:
+            logger.warning(f"单个嵌入生成失败: {e}")
+            return None
+    
     def _find_best_matching_segments(self, target_text, ai_segments):
         """
         使用贪心算法找到与目标文本最匹配的AI片段组合
@@ -550,15 +632,18 @@ class HighPrecisionAudioProcessor:
         logger.info("开始基于种子的说话人识别...")
         
         try:
-            # 1. 生成种子指纹
-            s_seed_embedding = self._generate_seed_embedding(audio_data, seed_map['S'])
-            l_seed_embedding = self._generate_seed_embedding(audio_data, seed_map['L'])
+            # 1. 使用动态加载策略生成种子指纹
+            logger.info("步骤1: 生成S说话人的种子指纹...")
+            s_seed_embedding = self._get_embedding_with_fresh_model(audio_data, seed_map['S'])
+            
+            logger.info("步骤2: 生成L说话人的种子指纹...")
+            l_seed_embedding = self._get_embedding_with_fresh_model(audio_data, seed_map['L'])
             
             if s_seed_embedding is None or l_seed_embedding is None:
                 logger.error("无法生成一个或两个种子嵌入，跳过说话人识别")
                 return all_ai_segments, False
             
-            # --- 新增的种子自检逻辑 ---
+            # --- 种子自检逻辑 ---
             seeds_similarity = cosine_similarity(
                 s_seed_embedding.reshape(1, -1),
                 l_seed_embedding.reshape(1, -1)
@@ -579,10 +664,26 @@ class HighPrecisionAudioProcessor:
             
             logger.info("✅ 种子嵌入生成完成，种子差异充足")
             
-            # 2. 识别所有片段
-            sample_rate = 16000  # WhisperX使用16kHz
+            # 3. 为主要识别流程预加载一个"干净"的模型实例
+            logger.info("步骤3: 为主要识别流程动态加载模型...")
+            main_embedding_model = None
             
-            for i, segment in enumerate(all_ai_segments):
+            try:
+                hf_token = os.getenv('HF_TOKEN')
+                from pyannote.audio import Model
+                
+                main_embedding_model = Model.from_pretrained(
+                    "pyannote/embedding",
+                    use_auth_token=hf_token
+                )
+                main_embedding_model = main_embedding_model.to(self.device)
+                
+                logger.info("✅ 主要识别模型加载完成")
+                
+                # 4. 识别所有片段
+                sample_rate = 16000  # WhisperX使用16kHz
+                
+                for i, segment in enumerate(all_ai_segments):
                 try:
                     # 提取音频片段
                     start_sample = int(segment.get('start', 0) * sample_rate)
@@ -599,8 +700,8 @@ class HighPrecisionAudioProcessor:
                     
                     audio_segment = audio_data[start_sample:end_sample]
                     
-                    # 生成片段嵌入
-                    segment_embedding = self._generate_single_embedding(audio_segment)
+                    # 使用预加载的模型生成片段嵌入
+                    segment_embedding = self._generate_single_embedding_with_model(audio_segment, main_embedding_model)
                     
                     if segment_embedding is not None:
                         # 计算与种子的相似度
@@ -698,8 +799,20 @@ class HighPrecisionAudioProcessor:
             success_rate = (s_count + l_count) / len(all_ai_segments) if all_ai_segments else 0
             success = success_rate > 0.5  # 超过50%成功才算成功
             
-            logger.info(f"识别成功率: {success_rate:.2%}, 整体状态: {'成功' if success else '失败'}")
-            return all_ai_segments, success
+                logger.info(f"识别成功率: {success_rate:.2%}, 整体状态: {'成功' if success else '失败'}")
+                return all_ai_segments, success
+                
+            finally:
+                # 确保主要识别模型被清理
+                if main_embedding_model is not None:
+                    logger.info("🗑️ 清理主要识别模型...")
+                    del main_embedding_model
+                    
+                    # 清理CUDA缓存
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    
+                    logger.info("✅ 主要识别模型已卸载和清理")
             
         except Exception as e:
             logger.error(f"基于种子的说话人识别失败: {e}")
