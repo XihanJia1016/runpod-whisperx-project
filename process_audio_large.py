@@ -830,7 +830,7 @@ def process_conversations_with_golden_text(
                         logger.warning(f"文件 {audio_file.name} 不在映射中，跳过")
                         continue
                 else:
-                    # 尝试从文件名解析 (假设格式为 dyad_X_conversation_Y.wav)
+                    # 尝试从文件名解析 (假设格式为 dyad_X_conversation_Y.wav/.mp3)
                     try:
                         parts = audio_file.stem.split('_')
                         dyad_id = int(parts[1])
@@ -911,7 +911,7 @@ def main():
     # 检查必要文件和目录
     if not os.path.exists(audio_directory):
         print(f"❌ 音频目录不存在: {audio_directory}")
-        print("请将音频文件放在 /workspace/input/ 目录")
+        print("请将音频文件(.wav 或 .mp3)放在 /workspace/input/ 目录")
         return
     
     if not os.path.exists(golden_text_file):
@@ -922,11 +922,16 @@ def main():
     # 创建输出目录
     os.makedirs(output_directory, exist_ok=True)
     
-    # 检查音频文件
-    audio_files = list(Path(audio_directory).glob("*.wav"))
+    # 检查音频文件 (支持wav和mp3格式)
+    wav_files = list(Path(audio_directory).glob("*.wav"))
+    mp3_files = list(Path(audio_directory).glob("*.mp3"))
+    audio_files = wav_files + mp3_files
+    
     if not audio_files:
-        print(f"❌ 在 {audio_directory} 中没有找到 .wav 文件")
+        print(f"❌ 在 {audio_directory} 中没有找到音频文件(.wav 或 .mp3)")
         return
+    
+    print(f"✅ 找到音频文件: {len(wav_files)} 个.wav, {len(mp3_files)} 个.mp3")
     
     print(f"✅ 找到 {len(audio_files)} 个音频文件")
     
