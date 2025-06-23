@@ -352,7 +352,7 @@ class HighPrecisionAudioProcessor:
     
     def _find_seed_segments(self, golden_turns_df, ai_segments):
         """
-        根据黄金文本，从AI转录片段中找到每个说话人的种子片段
+        使用质量优先策略根据黄金文本找到每个说话人的种子片段
         
         Args:
             golden_turns_df: 已筛选的黄金文本DataFrame (当前dyad和conversation)
@@ -361,12 +361,12 @@ class HighPrecisionAudioProcessor:
         Returns:
             dict: {'S': [segment1, segment2, ...], 'L': [segment3, segment4, ...]}
         """
-        logger.info("开始寻找说话人种子片段...")
+        logger.info("开始寻找说话人种子片段（质量优先策略）...")
         
         seed_map = {'S': [], 'L': []}
         
         try:
-            # 找到S和L的第一个目标文本
+            # 找到S和L的轮次
             s_turns = golden_turns_df[golden_turns_df['role'] == 'S']
             l_turns = golden_turns_df[golden_turns_df['role'] == 'L']
             
@@ -374,44 +374,123 @@ class HighPrecisionAudioProcessor:
                 logger.warning("未找到S或L的黄金文本，无法生成种子")
                 return seed_map
             
-            # 获取第一个目标文本
-            s_target_text = self._clean_text_for_comparison(s_turns.iloc[0]['text'])
-            l_target_text = self._clean_text_for_comparison(l_turns.iloc[0]['text'])
+            # 为S找最佳质量种子
+            logger.info("🔍 分析S说话人的候选轮次...")
+            s_best_segments = self._find_best_quality_seed(s_turns, ai_segments, 'S')
+            if s_best_segments:
+                seed_map['S'] = s_best_segments
             
-            logger.info(f"S目标文本: {s_target_text[:50]}...")
-            logger.info(f"L目标文本: {l_target_text[:50]}...")
+            # 为L找最佳质量种子 (排除已用于S的片段)
+            logger.info("🔍 分析L说话人的候选轮次...")
+            remaining_segments = [seg for seg in ai_segments if seg not in s_best_segments]
+            l_best_segments = self._find_best_quality_seed(l_turns, remaining_segments, 'L')
+            if l_best_segments:
+                seed_map['L'] = l_best_segments
             
-            # 为S找种子片段
-            s_seed_segments = self._find_best_matching_segments(s_target_text, ai_segments)
-            if s_seed_segments:
-                seed_map['S'] = s_seed_segments
-                logger.info(f"找到S的种子片段: {len(s_seed_segments)}个")
-            
-            # 为L找种子片段 (排除已用于S的片段)
-            remaining_segments = [seg for seg in ai_segments if seg not in s_seed_segments]
-            l_seed_segments = self._find_best_matching_segments(l_target_text, remaining_segments)
-            if l_seed_segments:
-                seed_map['L'] = l_seed_segments
-                logger.info(f"找到L的种子片段: {len(l_seed_segments)}个")
-            
-            # 强化的种子选择日志输出
-            logger.info(f"🌱 为S选择的种子文本: '{s_target_text[:50]}...'")
-            logger.info(f"🌱 为S找到的AI种子片段数量: {len(s_seed_segments)}")
-            if s_seed_segments:
-                for i, seg in enumerate(s_seed_segments[:3]):  # 只显示前3个
-                    logger.info(f"   S种子片段{i+1}: '{seg.get('text', '')[:30]}...'")
-                    
-            logger.info(f"🌱 为L选择的种子文本: '{l_target_text[:50]}...'")
-            logger.info(f"🌱 为L找到的AI种子片段数量: {len(l_seed_segments)}")
-            if l_seed_segments:
-                for i, seg in enumerate(l_seed_segments[:3]):  # 只显示前3个
-                    logger.info(f"   L种子片段{i+1}: '{seg.get('text', '')[:30]}...'")
-            
-            return {'S': s_seed_segments, 'L': l_seed_segments}
+            logger.info(f"🌱 最终种子选择结果: S={len(seed_map['S'])}个片段, L={len(seed_map['L'])}个片段")
+            return seed_map
             
         except Exception as e:
             logger.error(f"寻找种子片段失败: {e}")
             return {'S': [], 'L': []}
+    
+    def _find_best_quality_seed(self, speaker_turns, available_segments, speaker_name):
+        """
+        使用质量优先策略为指定说话人找到最佳种子片段
+        
+        Args:
+            speaker_turns: 该说话人的黄金文本轮次
+            available_segments: 可用的AI片段
+            speaker_name: 说话人名称（用于日志）
+            
+        Returns:
+            list: 最佳质量的种子片段列表
+        """
+        # 定义候选范围：前5个轮次
+        MAX_CANDIDATES = min(5, len(speaker_turns))
+        candidate_turns = speaker_turns.head(MAX_CANDIDATES)
+        
+        logger.info(f"   {speaker_name}说话人有{len(speaker_turns)}个轮次，分析前{MAX_CANDIDATES}个候选")
+        
+        best_quality_score = -1
+        best_segments = []
+        best_turn_text = ""
+        
+        # 遍历每个候选轮次
+        for idx, (_, turn) in enumerate(candidate_turns.iterrows()):
+            turn_text = self._clean_text_for_comparison(turn['text'])
+            turn_length = len(turn_text)
+            
+            # 使用贪心对齐找到对应的AI片段
+            matched_segments = self._find_best_matching_segments(turn_text, available_segments)
+            
+            if matched_segments:
+                # 计算质量分：平均单词置信度
+                quality_score = self._calculate_quality_score(matched_segments)
+                
+                logger.info(f"   候选{idx+1}: 文本长度={turn_length}, 匹配片段={len(matched_segments)}个, "
+                           f"质量分={quality_score:.4f}")
+                logger.info(f"     文本: '{turn_text[:50]}...'")
+                
+                # 选择质量分最高的
+                if quality_score > best_quality_score:
+                    best_quality_score = quality_score
+                    best_segments = matched_segments
+                    best_turn_text = turn_text
+                    best_candidate_idx = idx + 1
+            else:
+                logger.info(f"   候选{idx+1}: 文本长度={turn_length}, 匹配片段=0个, 质量分=0.0000")
+                logger.info(f"     文本: '{turn_text[:50]}...'")
+        
+        if best_segments:
+            logger.info(f"✅ {speaker_name}最佳种子选择: 候选{best_candidate_idx}, "
+                       f"质量分={best_quality_score:.4f}, 片段数={len(best_segments)}")
+            logger.info(f"   最佳种子文本: '{best_turn_text[:50]}...'")
+            for i, seg in enumerate(best_segments[:3]):  # 显示前3个片段
+                logger.info(f"   种子片段{i+1}: '{seg.get('text', '')[:30]}...'")
+        else:
+            logger.warning(f"❌ {speaker_name}未找到有效的种子片段")
+        
+        return best_segments
+    
+    def _calculate_quality_score(self, segments):
+        """
+        计算AI片段组合的平均单词置信度质量分
+        
+        Args:
+            segments: AI片段列表
+            
+        Returns:
+            float: 平均单词置信度 (0-1之间)
+        """
+        total_score = 0.0
+        total_words = 0
+        
+        for segment in segments:
+            words = segment.get('words', [])
+            for word in words:
+                # 尝试多种可能的置信度字段名
+                score = (word.get('score') or 
+                        word.get('probability') or 
+                        word.get('confidence') or 
+                        0.0)
+                total_score += score
+                total_words += 1
+        
+        if total_words == 0:
+            # 如果没有单词级信息，使用片段级置信度
+            segment_scores = []
+            for segment in segments:
+                seg_score = (segment.get('avg_logprob') or 
+                           segment.get('confidence') or 
+                           0.0)
+                if seg_score < 0:  # logprob转换为概率
+                    seg_score = max(0.0, min(1.0, (seg_score + 1.0)))
+                segment_scores.append(seg_score)
+            
+            return sum(segment_scores) / len(segment_scores) if segment_scores else 0.0
+        
+        return total_score / total_words
     
     def _find_best_matching_segments(self, target_text, ai_segments):
         """
