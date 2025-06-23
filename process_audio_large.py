@@ -931,9 +931,7 @@ def main():
         print(f"❌ 在 {audio_directory} 中没有找到音频文件(.wav 或 .mp3)")
         return
     
-    print(f"✅ 找到音频文件: {len(wav_files)} 个.wav, {len(mp3_files)} 个.mp3")
-    
-    print(f"✅ 找到 {len(audio_files)} 个音频文件")
+    print(f"✅ 找到音频文件: {len(wav_files)} 个.wav, {len(mp3_files)} 个.mp3 (总计 {len(audio_files)} 个)")
     
     logger.info("=== 开始批量处理音频文件 ===")
     
