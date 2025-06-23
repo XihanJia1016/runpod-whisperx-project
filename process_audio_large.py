@@ -891,26 +891,46 @@ def process_conversations_with_golden_text(
 
 
 def main():
-    """主函数示例"""
+    """主函数 - RunPod使用示例"""
     
-    # 配置路径
-    audio_directory = "/path/to/your/audio/files"  # 需要根据实际情况修改
-    golden_text_file = "/Users/xihanjia/Library/CloudStorage/OneDrive-VrijeUniversiteitAmsterdam/project/4 text mining/text_data_output.csv"
-    output_directory = "/path/to/output"  # 需要根据实际情况修改
+    print("🚀 WhisperX半自动种子识别说话人日志系统")
+    print("=" * 50)
     
-    # 可选：手动定义文件名映射
-    # conversation_mapping = {
-    #     "audio1.wav": (19, 4),
-    #     "audio2.wav": (33, 4),
-    #     # ...
-    # }
+    # 跳过耗时的环境检查，直接开始
+    print("⚡ 开始处理...")
+    
+    # 默认RunPod路径配置
+    audio_directory = "/workspace/input"
+    golden_text_file = "/workspace/input/text_data_output.csv"
+    output_directory = "/workspace/output"
+    
+    print(f"📁 音频文件目录: {audio_directory}")
+    print(f"📄 黄金文本文件: {golden_text_file}")
+    print(f"📤 输出目录: {output_directory}")
+    
+    # 检查必要文件和目录
+    if not os.path.exists(audio_directory):
+        print(f"❌ 音频目录不存在: {audio_directory}")
+        print("请将音频文件放在 /workspace/input/ 目录")
+        return
+    
+    if not os.path.exists(golden_text_file):
+        print(f"❌ 黄金文本文件不存在: {golden_text_file}")
+        print("请将 text_data_output.csv 文件放在 /workspace/input/ 目录")
+        return
+    
+    # 创建输出目录
+    os.makedirs(output_directory, exist_ok=True)
+    
+    # 检查音频文件
+    audio_files = list(Path(audio_directory).glob("*.wav"))
+    if not audio_files:
+        print(f"❌ 在 {audio_directory} 中没有找到 .wav 文件")
+        return
+    
+    print(f"✅ 找到 {len(audio_files)} 个音频文件")
     
     logger.info("=== 开始批量处理音频文件 ===")
-    
-    # 检查黄金文本文件是否存在
-    if not os.path.exists(golden_text_file):
-        logger.error(f"黄金文本文件不存在: {golden_text_file}")
-        return
     
     # 开始处理
     process_conversations_with_golden_text(
@@ -921,6 +941,7 @@ def main():
     )
     
     logger.info("=== 处理完成 ===")
+    print("🎉 处理完成！结果保存在 /workspace/output/")
 
 
 if __name__ == "__main__":
