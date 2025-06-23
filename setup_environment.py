@@ -40,6 +40,26 @@ def check_cuda_available():
     except ImportError:
         return False
 
+def install_from_requirements():
+    """使用requirements.txt安装所有依赖"""
+    print("\n=== 使用requirements.txt安装依赖 ===")
+    
+    # 检查requirements.txt是否存在
+    if not os.path.exists("requirements.txt"):
+        print("❌ requirements.txt 文件不存在")
+        return False
+    
+    # 首先尝试直接安装
+    print("🔄 尝试直接安装所有依赖...")
+    if run_pip_command("pip install -r requirements.txt", "安装requirements.txt", ignore_errors=True):
+        print("✅ 依赖安装成功")
+        return True
+    
+    print("⚠️ 直接安装失败，尝试分步安装...")
+    
+    # 如果失败，分步安装关键组件
+    return install_pytorch_compatible()
+
 def install_pytorch_compatible():
     """安装兼容的PyTorch版本"""
     print("\n=== 安装PyTorch生态系统 ===")
@@ -221,11 +241,7 @@ def main():
     
     # 逐步安装
     steps = [
-        ("安装PyTorch", install_pytorch_compatible),
-        ("安装核心依赖", install_core_dependencies), 
-        ("安装Transformers", install_transformers),
-        ("安装pyannote.audio", install_pyannote),
-        ("安装WhisperX", install_whisperx),
+        ("从requirements.txt安装", install_from_requirements),
         ("验证安装", verify_installation)
     ]
     

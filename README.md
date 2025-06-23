@@ -8,8 +8,12 @@ git clone https://github.com/XihanJia1016/runpod-whisperx-project.git
 cd runpod-whisperx-project
 ```
 
-### 2. 自动环境设置（推荐）
+### 2. 安装依赖
 ```bash
+# 方法1: 直接安装（推荐）
+pip install -r requirements.txt
+
+# 方法2: 自动环境设置（如果方法1失败）
 python setup_environment.py
 ```
 
@@ -34,8 +38,8 @@ python process_audio_large.py
 
 ### 手动修复
 ```bash
-# 使用稳定版本依赖
-pip install -r requirements_stable.txt
+# 重新安装依赖
+pip install -r requirements.txt
 
 # 或运行环境设置脚本
 python setup_environment.py
@@ -81,7 +85,7 @@ segments = processor.process_single_file("audio.wav", 19, 4, golden_turns_df)
 
 - `process_audio_large.py` - 主要处理脚本
 - `setup_environment.py` - 环境设置和依赖修复
-- `requirements_stable.txt` - 稳定版本依赖
+- `requirements.txt` - 统一依赖文件（稳定版本）
 - `README_SEED_DIARIZATION.md` - 详细技术文档
 
 ## ⚡ 常见问题
