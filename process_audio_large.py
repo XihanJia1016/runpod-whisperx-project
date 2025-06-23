@@ -878,13 +878,25 @@ def process_conversations_with_golden_text(
                         logger.warning(f"文件 {audio_file.name} 不在映射中，跳过")
                         continue
                 else:
-                    # 尝试从文件名解析 (假设格式为 dyad_X_conversation_Y.wav/.mp3)
+                    # 尝试从文件名解析，支持多种格式
                     try:
-                        parts = audio_file.stem.split('_')
-                        dyad_id = int(parts[1])
-                        conversation_id = int(parts[3])
+                        # 格式1: dyad_X_conversation_Y.mp3
+                        if '_' in audio_file.stem:
+                            parts = audio_file.stem.split('_')
+                            dyad_id = int(parts[1])
+                            conversation_id = int(parts[3])
+                        # 格式2: X.Y.mp3 (dyad.conversation.mp3)
+                        elif '.' in audio_file.stem:
+                            parts = audio_file.stem.split('.')
+                            dyad_id = int(parts[0])
+                            conversation_id = int(parts[1])
+                        else:
+                            raise ValueError("无法识别的文件名格式")
+                            
+                        logger.info(f"📁 解析文件 {audio_file.name} -> dyad:{dyad_id}, conversation:{conversation_id}")
                     except (ValueError, IndexError):
                         logger.warning(f"无法从文件名解析dyad和conversation: {audio_file.name}")
+                        logger.info("支持的格式: dyad_X_conversation_Y.mp3 或 X.Y.mp3")
                         continue
                 
                 # 过滤对应的黄金文本
