@@ -684,121 +684,121 @@ class HighPrecisionAudioProcessor:
                 sample_rate = 16000  # WhisperX使用16kHz
                 
                 for i, segment in enumerate(all_ai_segments):
-                try:
-                    # 提取音频片段
-                    start_sample = int(segment.get('start', 0) * sample_rate)
-                    end_sample = int(segment.get('end', 0) * sample_rate)
-                    
-                    # 确保索引有效
-                    start_sample = max(0, start_sample)
-                    end_sample = min(len(audio_data), end_sample)
-                    
-                    if start_sample >= end_sample:
-                        logger.warning(f"片段{i}时间戳无效，跳过")
-                        segment['speaker'] = 'UNKNOWN'
-                        continue
-                    
-                    audio_segment = audio_data[start_sample:end_sample]
-                    
-                    # 使用预加载的模型生成片段嵌入
-                    segment_embedding = self._generate_single_embedding_with_model(audio_segment, main_embedding_model)
-                    
-                    if segment_embedding is not None:
-                        # 计算与种子的相似度
-                        s_similarity = cosine_similarity(
-                            segment_embedding.reshape(1, -1), 
-                            s_seed_embedding.reshape(1, -1)
-                        )[0][0]
+                    try:
+                        # 提取音频片段
+                        start_sample = int(segment.get('start', 0) * sample_rate)
+                        end_sample = int(segment.get('end', 0) * sample_rate)
                         
-                        l_similarity = cosine_similarity(
-                            segment_embedding.reshape(1, -1), 
-                            l_seed_embedding.reshape(1, -1)
-                        )[0][0]
+                        # 确保索引有效
+                        start_sample = max(0, start_sample)
+                        end_sample = min(len(audio_data), end_sample)
                         
-                        # 重构的说话人分配逻辑 - 分步决策流程
+                        if start_sample >= end_sample:
+                            logger.warning(f"片段{i}时间戳无效，跳过")
+                            segment['speaker'] = 'UNKNOWN'
+                            continue
                         
-                        # 1. 定义阈值
-                        MIN_CONFIDENCE_THRESHOLD = 0.45  # 稍微降低最小置信度
-                        MIN_DIFFERENCE_THRESHOLD = 0.08  # 稍微降低差距要求
+                        audio_segment = audio_data[start_sample:end_sample]
                         
-                        confidence = 0.0
-                        assigned_speaker = 'UNKNOWN'
+                        # 使用预加载的模型生成片段嵌入
+                        segment_embedding = self._generate_single_embedding_with_model(audio_segment, main_embedding_model)
                         
-                        # 3. 确定胜出方
-                        if s_similarity > l_similarity:
-                            winner = 'S'
-                            winner_score = s_similarity
-                            loser_score = l_similarity
-                        else:
-                            winner = 'L'
-                            winner_score = l_similarity
-                            loser_score = s_similarity
-                        
-                        # 4. 分步验证结果是否可信
-                        # 条件1: 胜出方的分数是否达到了最低要求？
-                        is_confident_enough = winner_score >= MIN_CONFIDENCE_THRESHOLD
-                        
-                        # 条件2: 胜出方和失败方的分数差距是否足够大？
-                        is_distinct_enough = (winner_score - loser_score) >= MIN_DIFFERENCE_THRESHOLD
-                        
-                        # 只有当两个条件都满足时，我们才接受这个结果
-                        if is_confident_enough and is_distinct_enough:
-                            assigned_speaker = winner
-                            confidence = winner_score
-                        else:
-                            # 否则，即使有一方分数更高，我们依然认为结果不可靠
+                        if segment_embedding is not None:
+                            # 计算与种子的相似度
+                            s_similarity = cosine_similarity(
+                                segment_embedding.reshape(1, -1), 
+                                s_seed_embedding.reshape(1, -1)
+                            )[0][0]
+                            
+                            l_similarity = cosine_similarity(
+                                segment_embedding.reshape(1, -1), 
+                                l_seed_embedding.reshape(1, -1)
+                            )[0][0]
+                            
+                            # 重构的说话人分配逻辑 - 分步决策流程
+                            
+                            # 1. 定义阈值
+                            MIN_CONFIDENCE_THRESHOLD = 0.45  # 稍微降低最小置信度
+                            MIN_DIFFERENCE_THRESHOLD = 0.08  # 稍微降低差距要求
+                            
+                            confidence = 0.0
                             assigned_speaker = 'UNKNOWN'
-                            confidence = winner_score  # 依然可以记录最高分，但标签是UNKNOWN
-                        
-                        segment['speaker'] = assigned_speaker
-                        segment['confidence'] = float(confidence)
-                        
-                        # 调试日志 - 显示前几个片段的详细信息
-                        if i < 5:
-                            if assigned_speaker != 'UNKNOWN':
-                                logger.info(f"✅ 片段 {i}: S={s_similarity:.3f}, L={l_similarity:.3f}, "
-                                           f"胜出={winner}({winner_score:.3f}), 差距={winner_score-loser_score:.3f}, "
-                                           f"分配={assigned_speaker}")
+                            
+                            # 3. 确定胜出方
+                            if s_similarity > l_similarity:
+                                winner = 'S'
+                                winner_score = s_similarity
+                                loser_score = l_similarity
                             else:
-                                reason = []
-                                if not is_confident_enough:
-                                    reason.append(f"置信度不足({winner_score:.3f}<{MIN_CONFIDENCE_THRESHOLD})")
-                                if not is_distinct_enough:
-                                    reason.append(f"差距不够({winner_score-loser_score:.3f}<{MIN_DIFFERENCE_THRESHOLD})")
-                                
-                                logger.warning(f"❌ 片段 {i}: S={s_similarity:.3f}, L={l_similarity:.3f}, "
-                                             f"胜出={winner}({winner_score:.3f}), 标记=UNKNOWN, "
-                                             f"原因: {', '.join(reason)}")
+                                winner = 'L'
+                                winner_score = l_similarity
+                                loser_score = s_similarity
+                            
+                            # 4. 分步验证结果是否可信
+                            # 条件1: 胜出方的分数是否达到了最低要求？
+                            is_confident_enough = winner_score >= MIN_CONFIDENCE_THRESHOLD
+                            
+                            # 条件2: 胜出方和失败方的分数差距是否足够大？
+                            is_distinct_enough = (winner_score - loser_score) >= MIN_DIFFERENCE_THRESHOLD
+                            
+                            # 只有当两个条件都满足时，我们才接受这个结果
+                            if is_confident_enough and is_distinct_enough:
+                                assigned_speaker = winner
+                                confidence = winner_score
+                            else:
+                                # 否则，即使有一方分数更高，我们依然认为结果不可靠
+                                assigned_speaker = 'UNKNOWN'
+                                confidence = winner_score  # 依然可以记录最高分，但标签是UNKNOWN
+                            
+                            segment['speaker'] = assigned_speaker
+                            segment['confidence'] = float(confidence)
+                            
+                            # 调试日志 - 显示前几个片段的详细信息
+                            if i < 5:
+                                if assigned_speaker != 'UNKNOWN':
+                                    logger.info(f"✅ 片段 {i}: S={s_similarity:.3f}, L={l_similarity:.3f}, "
+                                               f"胜出={winner}({winner_score:.3f}), 差距={winner_score-loser_score:.3f}, "
+                                               f"分配={assigned_speaker}")
+                                else:
+                                    reason = []
+                                    if not is_confident_enough:
+                                        reason.append(f"置信度不足({winner_score:.3f}<{MIN_CONFIDENCE_THRESHOLD})")
+                                    if not is_distinct_enough:
+                                        reason.append(f"差距不够({winner_score-loser_score:.3f}<{MIN_DIFFERENCE_THRESHOLD})")
+                                    
+                                    logger.warning(f"❌ 片段 {i}: S={s_similarity:.3f}, L={l_similarity:.3f}, "
+                                                 f"胜出={winner}({winner_score:.3f}), 标记=UNKNOWN, "
+                                                 f"原因: {', '.join(reason)}")
+                            
+                        else:
+                            logger.warning(f"片段{i}无法生成嵌入，使用默认标记")
+                            segment['speaker'] = 'UNKNOWN'
+                            segment['confidence'] = None
                         
-                    else:
-                        logger.warning(f"片段{i}无法生成嵌入，使用默认标记")
+                    except Exception as e:
+                        logger.warning(f"处理片段{i}失败: {e}")
                         segment['speaker'] = 'UNKNOWN'
                         segment['confidence'] = None
-                        
-                except Exception as e:
-                    logger.warning(f"处理片段{i}失败: {e}")
-                    segment['speaker'] = 'UNKNOWN'
-                    segment['confidence'] = None
-            
-            # 统计结果和相似度分布
-            s_count = sum(1 for seg in all_ai_segments if seg.get('speaker') == 'S')
-            l_count = sum(1 for seg in all_ai_segments if seg.get('speaker') == 'L')
-            unknown_count = sum(1 for seg in all_ai_segments if seg.get('speaker') == 'UNKNOWN')
-            
-            # 统计置信度分布（用于调试门槛设置）
-            confidences = [seg.get('confidence', 0) for seg in all_ai_segments if seg.get('confidence') is not None]
-            if confidences:
-                avg_confidence = sum(confidences) / len(confidences)
-                max_confidence = max(confidences)
-                min_confidence = min(confidences)
-                logger.info(f"置信度统计: 平均={avg_confidence:.3f}, 最高={max_confidence:.3f}, 最低={min_confidence:.3f}")
-            
-            logger.info(f"说话人识别结果: S={s_count}, L={l_count}, Unknown={unknown_count}")
-            
-            # 检查是否有足够的成功识别
-            success_rate = (s_count + l_count) / len(all_ai_segments) if all_ai_segments else 0
-            success = success_rate > 0.5  # 超过50%成功才算成功
-            
+                
+                # 统计结果和相似度分布
+                s_count = sum(1 for seg in all_ai_segments if seg.get('speaker') == 'S')
+                l_count = sum(1 for seg in all_ai_segments if seg.get('speaker') == 'L')
+                unknown_count = sum(1 for seg in all_ai_segments if seg.get('speaker') == 'UNKNOWN')
+                
+                # 统计置信度分布（用于调试门槛设置）
+                confidences = [seg.get('confidence', 0) for seg in all_ai_segments if seg.get('confidence') is not None]
+                if confidences:
+                    avg_confidence = sum(confidences) / len(confidences)
+                    max_confidence = max(confidences)
+                    min_confidence = min(confidences)
+                    logger.info(f"置信度统计: 平均={avg_confidence:.3f}, 最高={max_confidence:.3f}, 最低={min_confidence:.3f}")
+                
+                logger.info(f"说话人识别结果: S={s_count}, L={l_count}, Unknown={unknown_count}")
+                
+                # 检查是否有足够的成功识别
+                success_rate = (s_count + l_count) / len(all_ai_segments) if all_ai_segments else 0
+                success = success_rate > 0.5  # 超过50%成功才算成功
+                
                 logger.info(f"识别成功率: {success_rate:.2%}, 整体状态: {'成功' if success else '失败'}")
                 return all_ai_segments, success
                 
@@ -813,7 +813,7 @@ class HighPrecisionAudioProcessor:
                         torch.cuda.empty_cache()
                     
                     logger.info("✅ 主要识别模型已卸载和清理")
-            
+                
         except Exception as e:
             logger.error(f"基于种子的说话人识别失败: {e}")
             return all_ai_segments, False
