@@ -262,15 +262,26 @@ class HighPrecisionAudioProcessor:
             # 加载嵌入模型用于种子识别
             try:
                 logger.info("⏳ 正在下载和加载 pyannote/embedding 模型...")
+                logger.info(f"🔑 使用Token: {hf_token[:20] if hf_token else 'None'}...")
+                logger.info(f"📱 目标设备: {self.device}")
+                
+                # 等待一下，让模型下载完成
+                import time
+                time.sleep(2)
+                
                 self.embedding_model = Pipeline.from_pretrained(
                     "pyannote/embedding",
-                    use_auth_token=hf_token
+                    use_auth_token=hf_token,
+                    cache_dir="/tmp/huggingface_cache"
                 )
+                
+                logger.info(f"🔍 模型类型: {type(self.embedding_model)}")
                 
                 if self.embedding_model is None:
                     raise ValueError("嵌入模型加载返回None")
                     
                 # 移动到设备
+                logger.info("📱 移动模型到设备...")
                 self.embedding_model = self.embedding_model.to(self.device)
                 logger.info("✅ 说话人嵌入模型加载完成")
                 
