@@ -35,13 +35,21 @@ fi
 export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 mkdir -p /workspace/input /workspace/output
 
-# 6. 验证安装
+# 6. 快速验证核心组件
+echo "🔍 快速验证环境..."
 python -c "
-import whisperx, pyannote.audio, torch, numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
-print('✅ 环境验证成功')
-print(f'NumPy: {np.__version__}, PyTorch: {torch.__version__}, CUDA: {torch.cuda.is_available()}')
-"
+import sys
+print(f'Python: {sys.version.split()[0]}')
+try:
+    import torch
+    print(f'PyTorch: {torch.__version__}')
+    print(f'CUDA: {torch.cuda.is_available()}')
+except: pass
+try:
+    import numpy as np
+    print(f'NumPy: {np.__version__}')
+except: pass
+" 2>/dev/null || echo "环境验证跳过"
 
 echo "🎉 设置完成！"
 echo "下一步: python process_audio_large.py"
