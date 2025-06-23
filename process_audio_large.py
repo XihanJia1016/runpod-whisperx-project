@@ -394,7 +394,20 @@ class HighPrecisionAudioProcessor:
                 seed_map['L'] = l_seed_segments
                 logger.info(f"找到L的种子片段: {len(l_seed_segments)}个")
             
-            return seed_map
+            # 强化的种子选择日志输出
+            logger.info(f"🌱 为S选择的种子文本: '{s_target_text[:50]}...'")
+            logger.info(f"🌱 为S找到的AI种子片段数量: {len(s_seed_segments)}")
+            if s_seed_segments:
+                for i, seg in enumerate(s_seed_segments[:3]):  # 只显示前3个
+                    logger.info(f"   S种子片段{i+1}: '{seg.get('text', '')[:30]}...'")
+                    
+            logger.info(f"🌱 为L选择的种子文本: '{l_target_text[:50]}...'")
+            logger.info(f"🌱 为L找到的AI种子片段数量: {len(l_seed_segments)}")
+            if l_seed_segments:
+                for i, seg in enumerate(l_seed_segments[:3]):  # 只显示前3个
+                    logger.info(f"   L种子片段{i+1}: '{seg.get('text', '')[:30]}...'")
+            
+            return {'S': s_seed_segments, 'L': l_seed_segments}
             
         except Exception as e:
             logger.error(f"寻找种子片段失败: {e}")
@@ -463,10 +476,29 @@ class HighPrecisionAudioProcessor:
             l_seed_embedding = self._generate_seed_embedding(audio_data, seed_map['L'])
             
             if s_seed_embedding is None or l_seed_embedding is None:
-                logger.error("无法生成种子嵌入，跳过说话人识别")
+                logger.error("无法生成一个或两个种子嵌入，跳过说话人识别")
                 return all_ai_segments, False
             
-            logger.info("✅ 种子嵌入生成完成")
+            # --- 新增的种子自检逻辑 ---
+            seeds_similarity = cosine_similarity(
+                s_seed_embedding.reshape(1, -1),
+                l_seed_embedding.reshape(1, -1)
+            )[0][0]
+            
+            logger.info(f"🔍 种子自检：S和L的种子指纹相似度为 {seeds_similarity:.4f}")
+            
+            # 如果两个种子过于相似，则没有继续下去的意义
+            SIMILARITY_THRESHOLD = 0.85  # 这是一个可以调整的阈值
+            if seeds_similarity > SIMILARITY_THRESHOLD:
+                logger.error(f"❌ 种子过于相似 (相似度>{SIMILARITY_THRESHOLD})，无法区分说话人。请检查种子选择逻辑或音频质量。")
+                # 直接返回，标记所有为UNKNOWN并设置失败
+                for segment in all_ai_segments:
+                    segment['speaker'] = 'UNKNOWN'
+                    segment['confidence'] = 0.0
+                return all_ai_segments, False
+            # --- 自检逻辑结束 ---
+            
+            logger.info("✅ 种子嵌入生成完成，种子差异充足")
             
             # 2. 识别所有片段
             sample_rate = 16000  # WhisperX使用16kHz
