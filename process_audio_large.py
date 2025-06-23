@@ -489,11 +489,8 @@ class HighPrecisionAudioProcessor:
                     if len(audio_segment) < min_length:
                         audio_segment = np.pad(audio_segment, (0, min_length - len(audio_segment)))
                     
-                    # 转换为PyTorch tensor
-                    audio_tensor = torch.from_numpy(audio_segment).float().unsqueeze(0)
-                    
-                    if self.device == "cuda":
-                        audio_tensor = audio_tensor.cuda()
+                    # 转换为PyTorch tensor并立即发送到正确的设备
+                    audio_tensor = torch.from_numpy(audio_segment).float().unsqueeze(0).to(self.device)
                     
                     # 生成嵌入 - speechbrain 模型直接接收音频张量和其相对长度
                     with torch.no_grad():
@@ -554,11 +551,8 @@ class HighPrecisionAudioProcessor:
                 # 如果太短，用零填充
                 audio_segment = np.pad(audio_segment, (0, min_length - len(audio_segment)))
             
-            # 转换为PyTorch tensor
-            audio_tensor = torch.from_numpy(audio_segment).float().unsqueeze(0)
-            
-            if self.device == "cuda":
-                audio_tensor = audio_tensor.cuda()
+            # 转换为PyTorch tensor并立即发送到正确的设备
+            audio_tensor = torch.from_numpy(audio_segment).float().unsqueeze(0).to(self.device)
             
             # 生成嵌入 - speechbrain 模型调用方式
             with torch.no_grad():
