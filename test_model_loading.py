@@ -47,23 +47,25 @@ def test_model_loading():
         )
         print(f"✅ 模型下载完成: {model_path}")
         
-        # 加载Pipeline
-        print("🔄 初始化Pipeline...")
-        pipeline = Pipeline.from_pretrained(
+        # 加载Model（而不是Pipeline）
+        print("🔄 初始化Embedding Model...")
+        from pyannote.audio import Model
+        
+        model = Model.from_pretrained(
             "pyannote/embedding",
             use_auth_token=hf_token,
             cache_dir="/tmp/huggingface_cache"
         )
         
-        print(f"✅ Pipeline加载成功!")
-        print(f"📊 模型类型: {type(pipeline)}")
-        print(f"📊 Pipeline属性: {dir(pipeline)}")
+        print(f"✅ Embedding Model加载成功!")
+        print(f"📊 模型类型: {type(model)}")
+        print(f"📊 Model属性: {[attr for attr in dir(model) if not attr.startswith('_')][:10]}")
         
         # 测试移动到CUDA（如果可用）
         import torch
         if torch.cuda.is_available():
             print("🚀 测试CUDA...")
-            pipeline = pipeline.to("cuda")
+            model = model.to("cuda")
             print("✅ CUDA移动成功")
         else:
             print("💻 使用CPU模式")

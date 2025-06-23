@@ -261,18 +261,17 @@ class HighPrecisionAudioProcessor:
             
             # 加载嵌入模型用于种子识别
             try:
-                logger.info("⏳ 正在下载和加载 pyannote/embedding 模型...")
+                logger.info("⏳ 正在加载说话人嵌入模型...")
                 logger.info(f"🔑 使用Token: {hf_token[:20] if hf_token else 'None'}...")
                 logger.info(f"📱 目标设备: {self.device}")
                 
-                # 等待一下，让模型下载完成
-                import time
-                time.sleep(2)
+                # 使用正确的方式加载embedding模型
+                from pyannote.audio import Model
                 
-                self.embedding_model = Pipeline.from_pretrained(
+                # 直接加载embedding模型，而不是Pipeline
+                self.embedding_model = Model.from_pretrained(
                     "pyannote/embedding",
-                    use_auth_token=hf_token,
-                    cache_dir="/tmp/huggingface_cache"
+                    use_auth_token=hf_token
                 )
                 
                 logger.info(f"🔍 模型类型: {type(self.embedding_model)}")
@@ -301,7 +300,8 @@ class HighPrecisionAudioProcessor:
                 
                 # 重新尝试加载
                 try:
-                    self.embedding_model = Pipeline.from_pretrained(
+                    from pyannote.audio import Model
+                    self.embedding_model = Model.from_pretrained(
                         "pyannote/embedding",
                         use_auth_token=hf_token,
                         cache_dir="/tmp/huggingface_cache"  # 使用临时目录
@@ -587,12 +587,15 @@ class HighPrecisionAudioProcessor:
             if self.device == "cuda":
                 audio_tensor = audio_tensor.cuda()
             
-            # 生成嵌入
+            # 生成嵌入 - 使用Model的正确调用方式
             with torch.no_grad():
-                embedding = self.embedding_model({
+                # 构造输入格式
+                batch = {
                     "waveform": audio_tensor, 
                     "sample_rate": 16000
-                })
+                }
+                # 使用Model调用
+                embedding = self.embedding_model(batch)
             
             # 转换为numpy
             if isinstance(embedding, torch.Tensor):
