@@ -748,7 +748,7 @@ class HighPrecisionAudioProcessor:
             
             # 计算置信度（从多个可能的源）
             confidence = 0.0
-            if 'confidence' in seg:
+            if 'confidence' in seg and seg['confidence'] is not None:
                 confidence = seg['confidence']
             elif 'avg_logprob' in seg:
                 # 将logprob转换为置信度近似值
@@ -764,6 +764,10 @@ class HighPrecisionAudioProcessor:
             else:
                 # 默认合理置信度（而非0）
                 confidence = 0.8
+            
+            # 确保confidence是有效数值
+            if confidence is None:
+                confidence = 0.5  # 设置合理的默认值
             
             # 统计词级信息
             words = seg.get('words', [])
