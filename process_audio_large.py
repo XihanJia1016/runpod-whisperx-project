@@ -296,6 +296,88 @@ class HighPrecisionAudioProcessor:
         import re
         return re.sub(r'\s+', ' ', str(text).strip().lower())
     
+    def _force_align_initial_turns(self, golden_turns_df, all_segments, num_turns=3):
+        """
+        阶段一：强制分配开场轮次的说话人
+        
+        Args:
+            golden_turns_df: 黄金文本DataFrame
+            all_segments: 所有AI转录片段列表
+            num_turns: 强制分配的轮次数，默认3轮
+            
+        Returns:
+            tuple: (processed_segments, remaining_segments, success)
+                - processed_segments: 已强制分配好说话人的片段列表
+                - remaining_segments: 剩余未处理的片段列表  
+                - success: 此阶段是否成功
+        """
+        logger.info(f"🎯 强制分配前{num_turns}轮说话人...")
+        
+        processed_segments = []
+        cursor = 0  # AI片段的指针
+        success = True
+        
+        try:
+            # 确保有足够的轮次可以处理
+            actual_turns = min(num_turns, len(golden_turns_df))
+            logger.info(f"实际处理轮次: {actual_turns}")
+            
+            # 循环处理每一轮
+            for i in range(actual_turns):
+                golden_turn = golden_turns_df.iloc[i]
+                speaker = golden_turn['role']
+                text = golden_turn['text']
+                
+                logger.info(f"处理第{i+1}轮 - 说话人: {speaker}")
+                
+                # 从当前cursor位置开始寻找匹配的AI片段
+                available_segments = all_segments[cursor:]
+                
+                if not available_segments:
+                    logger.warning(f"第{i+1}轮: 没有剩余的AI片段可匹配")
+                    success = False
+                    break
+                
+                # 使用现有的贪心对齐逻辑找到最匹配的片段组合
+                matched_segments = self._find_best_matching_segments(text, available_segments)
+                
+                if not matched_segments:
+                    logger.warning(f"第{i+1}轮: 未找到匹配的AI片段")
+                    success = False
+                    break
+                
+                # 强制分配说话人
+                for segment in matched_segments:
+                    segment['speaker'] = speaker
+                    segment['confidence'] = 1.0  # 基于黄金标准，置信度最高
+                
+                # 添加到已处理列表
+                processed_segments.extend(matched_segments)
+                
+                # 更新cursor到最后一个匹配片段的下一个位置
+                last_matched_idx = None
+                for j, seg in enumerate(all_segments):
+                    if seg in matched_segments:
+                        last_matched_idx = j
+                
+                if last_matched_idx is not None:
+                    cursor = last_matched_idx + 1
+                else:
+                    # 如果没找到索引，保守地只移动1位
+                    cursor += len(matched_segments)
+                
+                logger.info(f"✅ 第{i+1}轮完成: 分配{len(matched_segments)}个片段给{speaker}, cursor移至{cursor}")
+            
+            # 计算剩余片段
+            remaining_segments = all_segments[cursor:] if cursor < len(all_segments) else []
+            
+            logger.info(f"🎯 强制分配阶段完成: 处理了{len(processed_segments)}个片段, 剩余{len(remaining_segments)}个片段")
+            return processed_segments, remaining_segments, success
+            
+        except Exception as e:
+            logger.error(f"强制分配阶段失败: {e}")
+            return [], all_segments, False
+
     def _find_seed_segments(self, golden_turns_df, ai_segments):
         """
         使用质量优先策略根据黄金文本找到每个说话人的种子片段
@@ -934,32 +1016,57 @@ class HighPrecisionAudioProcessor:
                 )
                 logger.info("✅ 强制对齐完成")
             
-            # 4. 基于种子的说话人识别 (新流程) - 使用"用时加载，用完即毁"架构
+            # 4. 新混合策略三阶段说话人识别流程
             speaker_success = False
-            if golden_turns_df is not None:
-                logger.info("开始基于种子的说话人识别（动态模型加载）...")
-                try:
-                    # 步骤A: 找到种子片段
-                    seed_map = self._find_seed_segments(golden_turns_df, result["segments"])
-                    
+            if golden_turns_df is not None and not golden_turns_df.empty:
+                
+                # --- 阶段一：强制分配开场（前3轮） ---
+                logger.info(">> 阶段一：强制分配前3轮说话人...")
+                # 调用一个新函数来处理这个逻辑，它会返回已被分配好说话人的片段，以及剩余未分配的片段
+                all_segments = result["segments"]
+                processed_segments, remaining_segments, success_stage1 = self._force_align_initial_turns(
+                    golden_turns_df, 
+                    all_segments,
+                    num_turns=3  # 指定强制分配的轮次数
+                )
+
+                # --- 阶段二 和 阶段三 ---
+                if success_stage1 and remaining_segments:
+                    logger.info(">> 阶段二：从后续轮次中智能选择种子...")
+
+                    # 种子选择范围从第4轮开始 (因为前3轮已用掉)
+                    seed_candidate_turns = golden_turns_df.iloc[3:]
+
+                    # 调用 _find_seed_segments，但只在候选轮次和剩余片段中寻找
+                    seed_map = self._find_seed_segments(seed_candidate_turns, remaining_segments)
+
                     if seed_map.get('S') and seed_map.get('L'):
-                        # 步骤B: 执行种子识别（使用动态模型加载）
-                        result["segments"], speaker_success = self.perform_seed_based_diarization(
-                            audio,  # 传入已加载的audio数据
-                            result["segments"],
+                        logger.info(">> 阶段三：对剩余片段进行种子识别...")
+
+                        # 调用 perform_seed_based_diarization，但只处理剩余的片段
+                        diarized_remaining_segments, success_stage3 = self.perform_seed_based_diarization(
+                            audio,
+                            remaining_segments,
                             seed_map
                         )
-                        if speaker_success:
-                            logger.info("✅ 基于种子的说话人识别完成")
-                        else:
-                            logger.warning("❌ 基于种子的说话人识别失败，使用回退方案")
+
+                        # 合并结果
+                        final_segments = processed_segments + diarized_remaining_segments
+                        speaker_success = True
                     else:
-                        logger.warning(f"对话 {dyad_id}-{conversation_id}: 未能找到S和L的种子，将使用回退方案")
-                        speaker_success = False
-                        
-                except Exception as e:
-                    logger.error(f"❌ 对话 {dyad_id}-{conversation_id}: 基于种子的说话人识别失败: {e}")
-                    speaker_success = False
+                        logger.warning("未能从后续轮次中找到足够的种子，剩余片段将使用回退方案。")
+                        # 对剩余部分使用回退方案
+                        for i, seg in enumerate(remaining_segments):
+                            seg['speaker'] = 'UNKNOWN'  # 或 A/B 轮换
+                        final_segments = processed_segments + remaining_segments
+                        speaker_success = False  # 整体不算完全成功
+                else:
+                    logger.warning("阶段一失败或没有剩余片段，直接使用阶段一的结果。")
+                    final_segments = processed_segments
+                    speaker_success = success_stage1
+
+                result["segments"] = final_segments
+
             else:
                 logger.warning("未提供黄金文本，跳过说话人识别")
                 speaker_success = False
