@@ -239,11 +239,26 @@ class HighPrecisionAudioProcessor:
             
             # 2. 加载对齐模型（提高时间戳精度）
             logger.info("加载强制对齐模型...")
-            self.align_model, self.metadata = whisperx.load_align_model(
-                language_code="nl",  # 荷兰语
-                device=self.device
-            )
-            logger.info("✅ 对齐模型加载完成")
+            try:
+                self.align_model, self.metadata = whisperx.load_align_model(
+                    language_code="nl",  # 荷兰语
+                    device=self.device
+                )
+                logger.info("✅ 对齐模型加载完成")
+            except Exception as e:
+                logger.warning(f"荷兰语对齐模型加载失败: {e}")
+                logger.info("尝试使用英语对齐模型作为备选...")
+                try:
+                    self.align_model, self.metadata = whisperx.load_align_model(
+                        language_code="en",  # 英语作为备选
+                        device=self.device
+                    )
+                    logger.info("✅ 英语对齐模型加载完成（备选方案）")
+                except Exception as e2:
+                    logger.warning(f"对齐模型加载完全失败: {e2}")
+                    logger.info("将跳过对齐步骤，使用原始时间戳")
+                    self.align_model = None
+                    self.metadata = None
             
             # 3. 加载说话人嵌入模型 (替换说话人识别模型)
             logger.info("加载说话人嵌入模型...")
@@ -488,19 +503,45 @@ class HighPrecisionAudioProcessor:
                             l_seed_embedding.reshape(1, -1)
                         )[0][0]
                         
-                        # 分配说话人并记录真实置信度
-                        if s_similarity > l_similarity:
-                            segment['speaker'] = 'S'
-                            confidence = s_similarity
+                        # 改进的说话人分配逻辑，使用双重门槛
+                        max_similarity = max(s_similarity, l_similarity)
+                        similarity_diff = abs(s_similarity - l_similarity)
+                        
+                        # 设置门槛参数
+                        MIN_CONFIDENCE_THRESHOLD = 0.5  # 最小置信度门槛
+                        MIN_DIFFERENCE_THRESHOLD = 0.1  # 安全区门槛
+                        
+                        # 检查两个条件
+                        confidence_sufficient = max_similarity > MIN_CONFIDENCE_THRESHOLD
+                        difference_sufficient = similarity_diff > MIN_DIFFERENCE_THRESHOLD
+                        
+                        if confidence_sufficient and difference_sufficient:
+                            # 满足两个条件，可以安全分配说话人
+                            if s_similarity > l_similarity:
+                                segment['speaker'] = 'S'
+                                confidence = s_similarity
+                            else:
+                                segment['speaker'] = 'L'
+                                confidence = l_similarity
+                            
+                            logger.debug(f"片段 {i}: S={s_similarity:.3f}, L={l_similarity:.3f}, "
+                                       f"差距={similarity_diff:.3f}, 分配={segment['speaker']}, 置信度={confidence:.3f}")
                         else:
-                            segment['speaker'] = 'L'
-                            confidence = l_similarity
+                            # 不满足条件，标记为UNKNOWN
+                            segment['speaker'] = 'UNKNOWN'
+                            confidence = max_similarity
+                            
+                            reason = []
+                            if not confidence_sufficient:
+                                reason.append(f"置信度不足({max_similarity:.3f}<{MIN_CONFIDENCE_THRESHOLD})")
+                            if not difference_sufficient:
+                                reason.append(f"差距过小({similarity_diff:.3f}<{MIN_DIFFERENCE_THRESHOLD})")
+                            
+                            logger.debug(f"片段 {i}: S={s_similarity:.3f}, L={l_similarity:.3f}, "
+                                       f"标记=UNKNOWN, 原因: {', '.join(reason)}")
                         
                         # 记录真实的置信度
                         segment['confidence'] = float(confidence)
-                        
-                        logger.debug(f"片段 {i}: S={s_similarity:.3f}, L={l_similarity:.3f}, "
-                                   f"分配={segment['speaker']}, 置信度={confidence:.3f}")
                         
                     else:
                         logger.warning(f"片段{i}无法生成嵌入，使用默认标记")
