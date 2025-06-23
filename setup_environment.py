@@ -118,7 +118,7 @@ def install_core_dependencies():
     print("\n=== 安装核心依赖 ===")
     
     core_packages = [
-        "numpy>=1.24.0,<2.0.0",
+        "numpy>=2.0.2",  # 更新以兼容WhisperX 3.3.4
         "pandas>=2.0.0,<3.0.0", 
         "scikit-learn>=1.3.0,<2.0.0",
         "librosa>=0.10.0,<1.0.0",
@@ -175,9 +175,10 @@ def install_whisperx():
         except Exception as e:
             print(f"⚠️ WhisperX 导入失败: {e}")
     
+    # 使用固定版本避免依赖冲突
     return run_pip_command(
-        "pip install git+https://github.com/m-bain/whisperx.git", 
-        "安装 WhisperX"
+        "pip install whisperx==3.3.4", 
+        "安装 WhisperX 3.3.4"
     )
 
 def verify_installation():
