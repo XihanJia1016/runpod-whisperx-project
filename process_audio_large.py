@@ -298,7 +298,7 @@ class HighPrecisionAudioProcessor:
     
     def _force_align_initial_turns(self, golden_turns_df, all_segments, num_turns=3):
         """
-        阶段一：强制分配开场轮次的说话人
+        阶段一：强制按顺序分配开场轮次的说话人
         
         Args:
             golden_turns_df: 黄金文本DataFrame
@@ -311,69 +311,78 @@ class HighPrecisionAudioProcessor:
                 - remaining_segments: 剩余未处理的片段列表  
                 - success: 此阶段是否成功
         """
-        logger.info(f"🎯 强制分配前{num_turns}轮说话人...")
+        logger.info(f"🎯 开始强制按顺序对齐前 {num_turns} 轮...")
         
+        processed_segments = []
+        ai_segment_cursor = 0  # 维护一个指向AI片段的指针
+        actual_turns_to_process = min(num_turns, len(golden_turns_df))
+
         try:
-            # 确保有足够的轮次可以处理
-            actual_turns = min(num_turns, len(golden_turns_df))
-            logger.info(f"实际处理轮次: {actual_turns}")
-            
-            # 为了避免复杂的cursor逻辑，我们使用更简单的方法:
-            # 使用原来的_find_seed_segments逻辑，但只处理前N轮
-            initial_turns = golden_turns_df.iloc[:actual_turns]
-            
-            logger.info(f"调用原有种子查找逻辑处理前{actual_turns}轮...")
-            seed_map = self._find_seed_segments(initial_turns, all_segments)
-            
-            if not (seed_map.get('S') and seed_map.get('L')):
-                logger.warning(f"前{actual_turns}轮未找到足够的种子，使用简单轮换")
-                # 简单的A/B轮换作为fallback
-                processed_segments = []
-                for i, segment in enumerate(all_segments[:6]):  # 处理前6个片段
-                    speaker = 'S' if i % 2 == 0 else 'L'
-                    segment_copy = segment.copy()
-                    segment_copy['speaker'] = speaker
-                    segment_copy['confidence'] = 0.8  # 中等置信度
-                    processed_segments.append(segment_copy)
+            # 严格按顺序处理指定的轮次数
+            for i in range(actual_turns_to_process):
+                golden_turn = golden_turns_df.iloc[i]
+                speaker = golden_turn['role']
+                target_text = self._clean_text_for_comparison(golden_turn['text'])
                 
-                remaining_segments = all_segments[6:]
-                return processed_segments, remaining_segments, True
-            
-            # 强制分配找到的种子片段
-            processed_segments = []
-            used_segments = set()
-            
-            # 处理S种子
-            for segment in seed_map['S']:
-                segment_copy = segment.copy()
-                segment_copy['speaker'] = 'S'
-                segment_copy['confidence'] = 1.0
-                processed_segments.append(segment_copy)
-                # 使用段落ID或时间戳作为唯一标识
-                used_segments.add(id(segment))
-            
-            # 处理L种子  
-            for segment in seed_map['L']:
-                segment_copy = segment.copy()
-                segment_copy['speaker'] = 'L'
-                segment_copy['confidence'] = 1.0
-                processed_segments.append(segment_copy)
-                used_segments.add(id(segment))
-            
-            # 计算剩余片段（未被使用的）
-            remaining_segments = [seg for seg in all_segments if id(seg) not in used_segments]
-            
-            logger.info(f"🎯 强制分配阶段完成:")
-            logger.info(f"   原始片段总数: {len(all_segments)}")
-            logger.info(f"   已处理片段: {len(processed_segments)}")
-            logger.info(f"   剩余片段: {len(remaining_segments)}")
-            logger.info(f"   总计: {len(processed_segments) + len(remaining_segments)}")
-            
+                logger.info(f"处理第 {i+1} 轮: 说话人={speaker}, 文本长度={len(target_text)}")
+                
+                # 定义当前的搜索空间，从指针位置开始
+                search_space = all_segments[ai_segment_cursor:]
+                
+                if not search_space:
+                    logger.warning(f"轮次 {i+1}: AI片段已耗尽，无法继续强制对齐。")
+                    break
+
+                # 在搜索空间中，为当前轮次寻找最佳匹配
+                matched_segments = self._find_best_matching_segments(target_text, search_space)
+
+                if not matched_segments:
+                    logger.warning(f"轮次 {i+1} (说话人: {speaker}) 在附近未找到匹配，强制对齐中止。")
+                    # 如果某一轮找不到匹配，就中止强制对齐，避免错误累积
+                    break
+
+                # 强制分配说话人并保存结果
+                for seg in matched_segments:
+                    seg_copy = seg.copy()
+                    seg_copy['speaker'] = speaker
+                    seg_copy['confidence'] = 1.0  # 基于黄金标准的分配，置信度设为最高
+                    processed_segments.append(seg_copy)
+
+                # 更新指针到最后一个被消费片段的下一个位置
+                # 这需要找到最后一个匹配片段在 all_segments 中的原始索引
+                last_segment_in_match = matched_segments[-1]
+                try:
+                    # 通过时间戳来定位（更可靠的方法）
+                    last_segment_end_time = last_segment_in_match.get('end', 0)
+                    
+                    # 找到这个时间戳对应的原始索引
+                    last_segment_index = -1
+                    for idx in range(ai_segment_cursor, len(all_segments)):
+                        if (all_segments[idx].get('end', 0) == last_segment_end_time and 
+                            all_segments[idx].get('start', 0) == last_segment_in_match.get('start', 0)):
+                            last_segment_index = idx
+                            break
+                    
+                    if last_segment_index != -1:
+                        ai_segment_cursor = last_segment_index + 1
+                        logger.info(f"✅ 第 {i+1} 轮完成，匹配了 {len(matched_segments)} 个片段，指针移动到位置 {ai_segment_cursor}")
+                    else:
+                        logger.error("无法在原始列表中定位到最后一个匹配片段，指针更新失败。")
+                        # 如果定位失败，保守地移动指针
+                        ai_segment_cursor += len(matched_segments)
+                        
+                except Exception as e:
+                    logger.error(f"指针更新失败: {e}")
+                    # 如果定位失败，保守地移动指针
+                    ai_segment_cursor += len(matched_segments)
+        
+            # 准备最终的返回结果
+            remaining_segments = all_segments[ai_segment_cursor:]
+            logger.info(f"✅ 强制对齐完成: {len(processed_segments)}个片段被处理, {len(remaining_segments)}个片段剩余。")
             return processed_segments, remaining_segments, True
-            
+
         except Exception as e:
-            logger.error(f"强制分配阶段失败: {e}")
-            # 发生错误时，返回所有片段作为剩余片段
+            logger.error(f"❌ 强制分配阶段发生严重错误: {e}")
             return [], all_segments, False
 
     def _find_seed_segments(self, golden_turns_df, ai_segments):
